@@ -1,0 +1,147 @@
+rules_version = '2';
+// =====================================================================
+//  SIAP · Reglas de seguridad de Cloud Firestore
+//  CBT No. 6 Gerardo Linares Terrón
+//  ANTES DE PUBLICAR: reemplaza TU_CORREO@ejemplo.com por el correo del
+//  administrador técnico (el mismo de js/config.js → superAdminEmail),
+//  todo en minúsculas.
+// =====================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- identidad y roles ----------
+    function signed()   { return request.auth != null; }
+    function email()    { return request.auth.token.email.lower(); }
+    function isSuper()  { return signed() && email() == 'TU_CORREO@ejemplo.com'; }
+    function uPath()    { return /databases/$(database)/documents/usuarios/$(request.auth.uid); }
+    function hasU()     { return signed() && exists(uPath()); }
+    function u()        { return get(uPath()).data; }
+    function roles()    { return hasU() ? u().roles : []; }
+    function has(r)     { return roles().hasAny([r]); }
+    function pid()      { return hasU() ? u().personaId : '__sin_persona__'; }
+    function staff()    { return has('subdirectora') || has('apoyo'); }        // equipo pedagógico
+    function observer() { return staff() || has('orientadora'); }
+    function admin()    { return isSuper() || has('admin'); }                   // sin acceso pedagógico
+    function nd()       { return request.resource.data; }
+    function od()       { return resource.data; }
+    function onlyKeys(ks) { return nd().diff(od()).affectedKeys().hasOnly(ks); }
+
+    // ---------- cuentas ----------
+    match /usuarios/{uid} {
+      allow read: if signed() && (request.auth.uid == uid || admin());
+      allow create: if signed() && request.auth.uid == uid && nd().email == email() && (
+                      isSuper() ||
+                      (exists(/databases/$(database)/documents/invitaciones/$(email())) &&
+                       nd().roles == get(/databases/$(database)/documents/invitaciones/$(email())).data.roles &&
+                       nd().personaId == get(/databases/$(database)/documents/invitaciones/$(email())).data.personaId));
+      allow update, delete: if admin();
+    }
+    match /invitaciones/{em} {
+      allow read: if signed() && (email() == em || admin());
+      allow write: if admin();
+    }
+
+    // ---------- catálogos (lectura para toda cuenta habilitada) ----------
+    match /{col}/{id} {
+      allow read: if hasU() && col in ['personas','grupos','unidades','actividades','modulos','asignaciones','horarios','instrumentos','calendario','paec','paec_avances'];
+    }
+    match /personas/{id}     { allow write: if staff() || admin(); }
+    match /grupos/{id}       { allow write: if staff() || isSuper(); }
+    match /unidades/{id}     { allow write: if staff() || isSuper(); }
+    match /actividades/{id}  { allow write: if staff() || isSuper(); }
+    match /modulos/{id}      { allow write: if staff() || isSuper(); }
+    match /asignaciones/{id} { allow write: if staff() || isSuper(); }
+    match /horarios/{id}     { allow write: if staff() || isSuper(); }
+    match /calendario/{id} {
+      allow create: if staff() || isSuper();
+      // el equipo de apoyo propone; solo la Subdirectora cambia las fechas vigentes
+      allow update: if staff() && (has('subdirectora') || !nd().diff(od()).affectedKeys().hasAny(['parciales','porConfirmar','historial']));
+    }
+    match /instrumentos/{id} {
+      allow create: if staff() || isSuper();
+      allow update: if staff() && (has('subdirectora') || (od().estado != 'Publicado' && nd().estado != 'Publicado'));
+    }
+    match /paec/{id}         { allow write: if staff() || has('vinculadora') || (signed() && resource != null && od().responsableId == pid()); }
+    match /paec_avances/{id} { allow create: if hasU() && nd().personaId == pid(); }
+
+    // ---------- planeación y sesiones ----------
+    match /planeaciones/{id} {
+      allow read: if observer() || (hasU() && od().docenteId == pid());
+      allow create: if staff() || (hasU() && nd().docenteId == pid());
+      allow update: if staff() || (hasU() && od().docenteId == pid() && nd().docenteId == pid());
+    }
+    match /archivos/{id} {
+      allow read: if observer() || (hasU() && od().docenteId == pid());
+      allow create: if hasU();
+    }
+    match /archivos_partes/{id} {
+      allow read: if observer() || (hasU() && od().docenteId == pid());
+      allow create: if hasU();
+    }
+    match /sesiones/{id} {
+      allow read: if observer() || (hasU() && od().docenteId == pid());
+      allow create: if observer() || (hasU() && nd().docenteId == pid());
+      allow update: if observer() || (hasU() && od().docenteId == pid());
+    }
+    match /concreciones/{id} {
+      allow read: if observer() || (hasU() && od().docenteId == pid());
+      allow write: if observer() || (hasU() && nd().docenteId == pid());
+    }
+    match /evidencias/{id} {
+      allow read: if staff() || (hasU() && (od().docenteId == pid() || od().observadorId == pid()));
+      allow create: if hasU() && (observer() || nd().docenteId == pid());
+    }
+
+    // ---------- observación y acompañamiento ----------
+    match /observaciones/{id} {
+      allow read: if staff() || (hasU() && (od().docenteId == pid() || od().observadorId == pid()));
+      allow create: if observer() && nd().observadorId != nd().docenteId && nd().docenteId != pid();   // sin autoobservación
+      allow update: if (hasU() && od().docenteId != pid() && (staff() || od().observadorId == pid()))
+                    || (hasU() && od().docenteId == pid() &&
+                        onlyKeys(['contextoDocente','autorreflexionCompleta','autorreflexionFecha','actualizado','actualizadoPor']) &&
+                        (nd().autorreflexionCompleta != true ||
+                         get(/databases/$(database)/documents/autorreflexiones/$(id)).data.enviada == true));
+    }
+    match /observacion_detalle/{id} {
+      function meta() { return get(/databases/$(database)/documents/observaciones/$(id)).data; }
+      // el docente observado solo lo ve después de enviar su autorreflexión y de que se cierre el registro
+      allow read: if hasU() && (
+                    (staff() && od().docenteId != pid()) ||
+                    od().observadorId == pid() ||
+                    (od().docenteId == pid() && meta().autorreflexionCompleta == true && meta().detalleBloqueado == true));
+      allow create, update: if hasU() && meta().docenteId != pid() && meta().detalleBloqueado != true &&
+                               (staff() || meta().observadorId == pid());
+    }
+    match /autorreflexiones/{id} {
+      allow read: if staff() || (hasU() && (od().docenteId == pid() || od().observadorId == pid()));
+      allow create: if hasU() && nd().docenteId == pid();
+      allow update: if hasU() && od().docenteId == pid() && od().enviada != true;
+    }
+    match /dialogos/{id} {
+      allow read: if staff() || (hasU() && (od().docenteId == pid() || od().observadorId == pid()));
+      allow write: if hasU() && nd().docenteId != pid() && (staff() || nd().observadorId == pid());
+    }
+    match /acuerdos/{id} {
+      allow read: if staff() || (hasU() && (od().docenteId == pid() || od().observadorId == pid() || od().responsableId == pid()));
+      allow create: if hasU() && nd().docenteId != pid() && (staff() || nd().observadorId == pid());
+      allow update: if hasU() && (staff() || od().observadorId == pid() ||
+                     ((od().responsableId == pid() || od().docenteId == pid()) && nd().estado in ['Pendiente','En proceso']));
+    }
+    match /seguimientos/{id} {
+      allow read: if staff() || (hasU() && (od().docenteId == pid() || od().observadorId == pid() || od().responsableId == pid()));
+      allow create: if hasU() && (staff() || nd().observadorId == pid() || nd().docenteId == pid() || nd().responsableId == pid());
+    }
+
+    // ---------- avisos y bitácora ----------
+    match /notificaciones/{id} {
+      allow read: if hasU() && od().paraId == pid();
+      allow create: if hasU();
+      allow update: if hasU() && od().paraId == pid() && onlyKeys(['leida']);
+    }
+    match /auditoria/{id} {
+      allow read: if staff() || admin();
+      allow create: if signed() && nd().uid == request.auth.uid;
+      // nunca se edita ni se borra
+    }
+  }
+}

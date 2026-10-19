@@ -1,0 +1,255 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guía de instalación SIAP</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+</head><body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: columna de lectura con índice lateral fijo; cada paso = texto + maqueta de pantalla */
+:root{
+  --bg:#f6f4f1; --surface:#ffffff; --ink:#241f1c; --muted:#6c635c; --line:#e3ddd6;
+  --guinda:#7a1f3d; --guinda-soft:#f5e7ec; --dorado:#a77b2c; --dorado-soft:#f7eedc; --ok:#23704f; --ok-soft:#e1f1e9;
+  --shot:#eef1f5; --shot-bar:#dfe4ea; --fb:#f57c00;
+  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161310;--surface:#211c18;--ink:#eee8e2;--muted:#b0a69c;--line:#3a332c;--guinda:#df84a2;--guinda-soft:#3b1f29;--dorado:#dcb36b;--dorado-soft:#372c1b;--ok:#73c9a5;--ok-soft:#17312a;--shot:#262b31;--shot-bar:#323941;--fb:#ffa040;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161310;--surface:#211c18;--ink:#eee8e2;--muted:#b0a69c;--line:#3a332c;--guinda:#df84a2;--guinda-soft:#3b1f29;--dorado:#dcb36b;--dorado-soft:#372c1b;--ok:#73c9a5;--ok-soft:#17312a;--shot:#262b31;--shot-bar:#323941;--fb:#ffa040;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.6;margin:0}
+.wrap{max-width:1120px;margin:0 auto;padding-block:32px 80px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;grid-template-columns:220px minmax(0,1fr);gap:40px}
+nav.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;font-size:.86rem;display:flex;flex-direction:column;gap:2px}
+nav.toc b{font-size:.7rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:14px 0 4px}
+nav.toc a{color:var(--ink);text-decoration:none;padding:4px 8px;border-radius:6px}
+nav.toc a:hover{background:var(--guinda-soft);color:var(--guinda)}
+header.h{grid-column:1/-1;display:flex;gap:18px;align-items:center;border-bottom:2px solid var(--guinda);padding-bottom:20px}
+.seal{width:58px;height:58px;border-radius:14px;background:var(--guinda);color:#fff;display:grid;place-items:center;font-weight:800;flex:none}
+h1{font-size:clamp(1.5rem,3vw,2.1rem);line-height:1.15;margin:0;text-wrap:balance;letter-spacing:-.015em}
+h2{font-size:1.35rem;margin:0 0 6px;text-wrap:balance}
+h3{font-size:1rem;margin:0 0 4px}
+p{margin:.45rem 0;max-width:68ch}
+.lead{color:var(--muted);margin:4px 0 0}
+main{min-width:0;display:flex;flex-direction:column;gap:22px}
+section.part{display:flex;flex-direction:column;gap:16px}
+.part-h{display:flex;align-items:baseline;gap:12px;margin-top:20px}
+.tag{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 10px;border-radius:99px;background:var(--dorado-soft);color:var(--dorado)}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.step{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;display:grid;grid-template-columns:44px minmax(0,1fr) minmax(0,330px);gap:18px;align-items:start}
+.num{width:40px;height:40px;border-radius:50%;background:var(--guinda);color:#fff;font-weight:800;display:grid;place-items:center;font-variant-numeric:tabular-nums}
+.step ol,.step ul{margin:6px 0;padding-left:20px;max-width:64ch}
+.step li{margin:3px 0}
+code,kbd{font-family:var(--f-mono);font-size:.84em;background:var(--guinda-soft);color:var(--guinda);padding:1px 6px;border-radius:5px;word-break:break-word}
+pre{font-family:var(--f-mono);font-size:.8rem;background:var(--shot);border:1px solid var(--line);border-radius:10px;padding:12px;overflow-x:auto;margin:8px 0;line-height:1.5}
+.note{border-left:3px solid var(--dorado);background:var(--dorado-soft);border-radius:8px;padding:10px 14px;font-size:.9rem;margin:8px 0}
+.note.ok{border-color:var(--ok);background:var(--ok-soft)}
+/* maquetas de pantalla */
+.shot{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--shot);font-size:.74rem;min-width:0}
+.shot .bar{background:var(--shot-bar);padding:6px 10px;display:flex;gap:5px;align-items:center}
+.shot .bar i{width:8px;height:8px;border-radius:50%;background:var(--line);display:block}
+.shot .bar span{margin-left:8px;font-family:var(--f-mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shot .in{padding:12px;display:flex;flex-direction:column;gap:7px}
+.ui-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ui-box{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.ui-btn{display:inline-block;border-radius:6px;padding:4px 10px;font-weight:700;background:var(--surface);border:1px solid var(--line)}
+.ui-btn.fb{background:var(--fb);color:#fff;border-color:transparent}
+.ui-btn.gh{background:#238636;color:#fff;border-color:transparent}
+.ui-btn.pri{background:var(--guinda);color:#fff;border-color:transparent}
+.hl{outline:2px dashed var(--guinda);outline-offset:2px}
+.ui-side{display:flex;flex-direction:column;gap:3px;width:90px;flex:none}
+.ui-side span{padding:3px 6px;border-radius:4px}
+.ui-side span.on{background:var(--guinda-soft);color:var(--guinda);font-weight:700}
+.muted{color:var(--muted)}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.tw{overflow-x:auto}
+a{color:var(--guinda)}
+:focus-visible{outline:2px solid var(--guinda);outline-offset:2px}
+@media (max-width:900px){.wrap{grid-template-columns:1fr}nav.toc{display:none}.step{grid-template-columns:40px minmax(0,1fr)}.step .shot{grid-column:1/-1}.grid2{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+<header class="h"><div class="seal">CBT6</div><div><h1>Guía de instalación del SIAP</h1>
+<p class="lead">Sistema Integral de Acompañamiento Pedagógico · CBT No. 6 Gerardo Linares Terrón, Toluca. Todo con servicios gratuitos: GitHub Pages para publicar la página y Firebase (plan Spark) para guardar los datos en la nube en tiempo real.</p></div></header>
+
+<nav class="toc" aria-label="Contenido">
+<b>Antes de empezar</b><a href="#necesitas">Qué necesitas</a><a href="#modos">Dos modos de datos</a>
+<b>A · Prueba rápida</b><a href="#a1">Publicar en GitHub Pages</a>
+<b>B · Nube en tiempo real</b><a href="#b1">1. Proyecto Firebase</a><a href="#b2">2. Inicio de sesión</a><a href="#b3">3. Base de datos</a><a href="#b4">4. Conectar la app</a><a href="#b5">5. Reglas de seguridad</a><a href="#b6">6. Dominio autorizado</a><a href="#b7">7. Primer acceso</a><a href="#b8">8. Alta de docentes</a>
+<b>Operación</b><a href="#limites">Límites gratuitos</a><a href="#problemas">Problemas comunes</a>
+</nav>
+
+<main>
+<section class="part" id="necesitas">
+  <div class="card"><h2>Qué necesitas</h2>
+  <ul>
+    <li>Una cuenta de Google (para Firebase). Puede ser la institucional o una creada para la Subdirección.</li>
+    <li>Una cuenta gratuita de GitHub (para publicar la página). Se crea en <code>github.com/signup</code>.</li>
+    <li>La carpeta <code>cbt6-sistema</code> descomprimida (viene en el archivo .zip).</li>
+    <li>Unos 30 a 40 minutos. No necesitas instalar programas ni escribir código: solo copiar y pegar en dos lugares.</li>
+  </ul></div>
+</section>
+
+<section class="part" id="modos">
+  <div class="grid2">
+    <div class="card"><span class="tag">Modo local</span><h3 style="margin-top:8px">Para probar y hacer el piloto</h3><p>Los datos viven solo en el navegador de esa computadora. Permite entrar “como” cualquier persona para revisar qué ve cada rol. No requiere Firebase.</p><p class="muted">En <code>js/config.js</code>: <code>mode: "local"</code> (así viene).</p></div>
+    <div class="card"><span class="tag ok">Modo Firebase</span><h3 style="margin-top:8px">Para operar con todo el plantel</h3><p>Cada persona entra con su correo y contraseña. Los cambios se ven al instante en todos los dispositivos y funcionan sin internet por momentos (se sincronizan al volver).</p><p class="muted">En <code>js/config.js</code>: <code>mode: "firebase"</code>.</p></div>
+  </div>
+  <p class="note">El sistema usa módulos de JavaScript, por eso <b>no abre con doble clic</b> sobre <code>index.html</code>. Siempre se abre desde una dirección web (GitHub Pages) o, en tu computadora, con la extensión “Live Server” de Visual Studio Code.</p>
+</section>
+
+<!-- ===================== PARTE A ===================== -->
+<section class="part" id="a1">
+  <div class="part-h"><span class="tag">Parte A</span><h2>Prueba rápida en internet (10 minutos)</h2></div>
+  <div class="step"><div class="num">A</div><div>
+    <h3>Sube la carpeta a GitHub Pages</h3>
+    <ol>
+      <li>Entra a <code>github.com</code> → botón verde <b>New</b> (nuevo repositorio).</li>
+      <li>Nombre: <code>siap-cbt6</code>, marca <b>Public</b> y pulsa <b>Create repository</b>.</li>
+      <li>En la página del repositorio elige <b>uploading an existing file</b>.</li>
+      <li>Arrastra <b>el contenido</b> de la carpeta <code>cbt6-sistema</code> (index.html, css, js, etc.), no la carpeta misma. Pulsa <b>Commit changes</b>.</li>
+      <li>Ve a <b>Settings → Pages</b>. En “Branch” elige <code>main</code> y <code>/ (root)</code>, y pulsa <b>Save</b>.</li>
+      <li>Espera 1–2 minutos y recarga: aparecerá tu dirección, por ejemplo <code>https://tu-usuario.github.io/siap-cbt6/</code>.</li>
+    </ol>
+    <p class="note ok">Listo: ya puedes abrir el sistema en modo local desde cualquier navegador o celular.</p>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>github.com/tu-usuario/siap-cbt6/settings/pages</span></div>
+    <div class="in"><div class="ui-row"><div class="ui-side"><span>General</span><span>Branches</span><span class="on">Pages</span></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><b>GitHub Pages</b><span class="muted">Build and deployment</span>
+      <div class="ui-row"><span class="ui-box hl">main ▾</span><span class="ui-box">/ (root) ▾</span><span class="ui-btn">Save</span></div>
+      <div class="ui-box" style="color:var(--ok)">Your site is live at https://tu-usuario.github.io/siap-cbt6/</div></div></div></div></div>
+  </div>
+</section>
+
+<!-- ===================== PARTE B ===================== -->
+<section class="part">
+  <div class="part-h"><span class="tag ok">Parte B</span><h2>Datos en la nube y en tiempo real con Firebase</h2></div>
+
+  <div class="step" id="b1"><div class="num">1</div><div>
+    <h3>Crea el proyecto en Firebase</h3>
+    <ol><li>Entra a <code>console.firebase.google.com</code> con tu cuenta de Google.</li>
+      <li>Pulsa <b>Crear un proyecto</b> (o “Agregar proyecto”). Nombre: <code>siap-cbt6</code>.</li>
+      <li>Cuando pregunte por Google Analytics, <b>desactívalo</b> (no se necesita) y pulsa <b>Crear proyecto</b>.</li></ol>
+    <p class="muted">El proyecto queda en el plan gratuito <b>Spark</b>; no pide tarjeta.</p>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>console.firebase.google.com</span></div>
+    <div class="in"><b style="font-size:.9rem">Te damos la bienvenida a Firebase</b><div class="ui-row"><span class="ui-btn fb hl">+ Crear un proyecto</span></div>
+    <div class="ui-box">Nombre del proyecto<br><b>siap-cbt6</b></div><div class="ui-box">Google Analytics &nbsp;<b style="color:var(--muted)">○ Desactivado</b></div></div></div>
+  </div>
+
+  <div class="step" id="b2"><div class="num">2</div><div>
+    <h3>Activa el inicio de sesión con correo</h3>
+    <ol><li>Menú izquierdo: <b>Compilación → Authentication</b> → <b>Comenzar</b>.</li>
+      <li>Pestaña <b>Sign-in method</b> → elige <b>Correo electrónico/contraseña</b>.</li>
+      <li>Activa el primer interruptor y pulsa <b>Guardar</b>.</li></ol>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>Authentication › Sign-in method</span></div>
+    <div class="in"><div class="ui-row"><div class="ui-side"><span>Firestore</span><span class="on">Authentication</span><span>Hosting</span></div>
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px"><div class="ui-box hl">Correo electrónico/contraseña &nbsp; <b style="color:var(--ok)">● Habilitar</b></div><span class="ui-btn fb" style="align-self:flex-start">Guardar</span></div></div></div></div>
+  </div>
+
+  <div class="step" id="b3"><div class="num">3</div><div>
+    <h3>Crea la base de datos Firestore</h3>
+    <ol><li>Menú: <b>Compilación → Firestore Database</b> → <b>Crear base de datos</b>.</li>
+      <li>Ubicación: elige <code>nam5 (United States)</code>. No se puede cambiar después.</li>
+      <li>Elige <b>Comenzar en modo de producción</b> y pulsa <b>Crear</b>. (Las reglas correctas se pegan en el paso 5.)</li></ol>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>Cloud Firestore › Crear base de datos</span></div>
+    <div class="in"><div class="ui-box">Ubicación: <b>nam5 (United States)</b></div><div class="ui-box hl">◉ Comenzar en modo de producción</div><div class="ui-box">○ Comenzar en modo de prueba</div><span class="ui-btn fb" style="align-self:flex-start">Crear</span></div></div>
+  </div>
+
+  <div class="step" id="b4"><div class="num">4</div><div>
+    <h3>Registra la app web y conecta el sistema</h3>
+    <ol><li>Arriba a la izquierda, pulsa el engrane ⚙ → <b>Configuración del proyecto</b>.</li>
+      <li>En “Tus apps” pulsa el ícono web <code>&lt;/&gt;</code>. Apodo: <code>SIAP</code>. <b>No</b> marques Firebase Hosting. Pulsa <b>Registrar app</b>.</li>
+      <li>Firebase muestra un bloque <code>const firebaseConfig = {…}</code>. Copia lo que está entre las llaves.</li>
+      <li>Abre <code>js/config.js</code> (en GitHub: abre el archivo y pulsa el lápiz ✎ para editar) y deja así:</li></ol>
+<pre>window.APP_CONFIG = {
+  mode: "firebase",
+  firebaseConfig: {
+    apiKey: "AIza…",
+    authDomain: "siap-cbt6.firebaseapp.com",
+    projectId: "siap-cbt6",
+    storageBucket: "siap-cbt6.appspot.com",
+    messagingSenderId: "1234567890",
+    appId: "1:1234567890:web:abc123"
+  },
+  superAdminEmail: "tu-correo@gmail.com",
+  …</pre>
+    <p class="note">La <code>apiKey</code> de Firebase no es una contraseña: es pública por diseño. La protección real está en las reglas del paso 5.</p>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>Configuración del proyecto › General</span></div>
+    <div class="in"><b>Tus apps</b><div class="ui-row"><span class="ui-btn">iOS</span><span class="ui-btn">Android</span><span class="ui-btn hl">&lt;/&gt; Web</span></div>
+    <div class="ui-box" style="font-family:var(--f-mono)">const firebaseConfig = {<br>&nbsp; apiKey: "AIza…",<br>&nbsp; projectId: "siap-cbt6", …<br>};</div></div></div>
+  </div>
+
+  <div class="step" id="b5"><div class="num">5</div><div>
+    <h3>Publica las reglas de seguridad</h3>
+    <ol><li>Abre el archivo <code>firestore.rules</code> de la carpeta y reemplaza <code>TU_CORREO@ejemplo.com</code> por el mismo correo de <code>superAdminEmail</code>, en minúsculas.</li>
+      <li>En Firebase: <b>Firestore Database → Reglas</b>. Borra todo lo que aparece y pega el contenido completo del archivo.</li>
+      <li>Pulsa <b>Publicar</b>.</li></ol>
+    <p>Estas reglas hacen que cada persona vea y modifique solo lo que le corresponde: el docente sus propios registros, el equipo de apoyo los expedientes del plantel, y nadie (ni el equipo) puede ver su propia valoración antes de enviar su autorreflexión. La bitácora de auditoría no se puede borrar.</p>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>Cloud Firestore › Reglas</span></div>
+    <div class="in"><div class="ui-row"><span class="ui-box">Datos</span><span class="ui-box hl"><b>Reglas</b></span><span class="ui-box">Índices</span></div>
+    <div class="ui-box" style="font-family:var(--f-mono)">rules_version = '2';<br>service cloud.firestore {<br>&nbsp; … isSuper() … 'tu-correo@gmail.com'</div><span class="ui-btn fb" style="align-self:flex-start">Publicar</span></div></div>
+  </div>
+
+  <div class="step" id="b6"><div class="num">6</div><div>
+    <h3>Autoriza el dominio de tu página</h3>
+    <ol><li><b>Authentication → Configuración → Dominios autorizados</b> → <b>Agregar dominio</b>.</li>
+      <li>Escribe <code>tu-usuario.github.io</code> (sin https:// ni carpeta) y guarda.</li></ol>
+    <p class="muted">Sin este paso aparece el error <code>auth/unauthorized-domain</code> al iniciar sesión.</p>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>Authentication › Configuración</span></div>
+    <div class="in"><b>Dominios autorizados</b><div class="ui-box">localhost</div><div class="ui-box">siap-cbt6.firebaseapp.com</div><div class="ui-box hl">tu-usuario.github.io</div></div></div>
+  </div>
+
+  <div class="step" id="b7"><div class="num">7</div><div>
+    <h3>Primer acceso del administrador</h3>
+    <ol><li>Abre tu dirección de GitHub Pages. Verás la pantalla de inicio de sesión.</li>
+      <li>Pestaña <b>Crear cuenta</b> con el correo de <code>superAdminEmail</code> y una contraseña (mínimo 6 caracteres).</li>
+      <li>Al entrar, el sistema sube automáticamente el catálogo inicial: 36 personas, 6 grupos, 36 unidades curriculares, las 72 asignaciones, los horarios de agosto, el calendario y el instrumento de observación.</li>
+      <li>Ve a <b>Administración → Usuarios y roles</b>, busca tu nombre, captura tu correo y marca tus funciones (por ejemplo <i>Docente</i> y <i>Docente de apoyo a Subdirección</i>). Guarda, cierra sesión y vuelve a entrar.</li></ol>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>tu-usuario.github.io/siap-cbt6</span></div>
+    <div class="in" style="align-items:center"><div class="ui-box" style="width:100%;max-width:230px;display:flex;flex-direction:column;gap:6px"><b>SIAP</b><div class="ui-row"><span>Iniciar sesión</span><b style="color:var(--guinda)" class="hl">Crear cuenta</b></div><div class="ui-box">correo</div><div class="ui-box">••••••</div><span class="ui-btn pri" style="text-align:center">Crear mi cuenta</span></div></div></div>
+  </div>
+
+  <div class="step" id="b8"><div class="num">8</div><div>
+    <h3>Da de alta a la Subdirectora, el equipo y los docentes</h3>
+    <ol><li>En <b>Administración → Usuarios y roles</b>, pulsa <b>Editar</b> en cada persona, escribe su correo y revisa sus roles (ya vienen sugeridos desde la lista de docentes).</li>
+      <li>Comparte la dirección de la página. Cada persona entra a <b>Crear cuenta</b> con ese mismo correo y recibe sus permisos automáticamente.</li>
+      <li>Si alguien ve “Cuenta pendiente de habilitar”, revisa que su correo esté escrito igual en su ficha.</li></ol>
+    <p class="note ok">Desde aquí todo se sincroniza en tiempo real: lo que captura una persona aparece en segundos en las pantallas de las demás.</p>
+  </div>
+  <div class="shot" aria-hidden="true"><div class="bar"><i></i><i></i><i></i><span>SIAP › Administración › Usuarios y roles</span></div>
+    <div class="in"><div class="ui-box"><b>Georgina Garcés Rodríguez</b><br><span class="muted">subdireccion@…</span> · <span style="color:var(--guinda)">Subdirectora</span></div><div class="ui-box hl"><b>Sandivel Borja Jaimes</b><br><span class="muted">correo…</span> · <span style="color:var(--guinda)">Docente · Apoyo</span></div><div class="ui-box"><b>Evelin Carbajal García</b><br><span class="muted">correo…</span> · <span style="color:var(--guinda)">Docente</span></div></div></div>
+  </div>
+</section>
+
+<section class="part" id="limites">
+  <div class="card"><h2>Límites del plan gratuito y cómo se respetan</h2>
+  <div class="tw"><table><thead><tr><th>Recurso (Firebase Spark)</th><th>Límite aproximado</th><th>Uso esperado del plantel</th></tr></thead><tbody>
+    <tr><td>Almacenamiento Firestore</td><td>1 GiB</td><td>Catálogos y registros ocupan pocos MB; las planeaciones Word se guardan en partes (máx. 5 MB c/u). Unas 220 planeaciones por semestre caben con holgura.</td></tr>
+    <tr><td>Lecturas por día</td><td>50 000</td><td>Cada docente solo descarga sus propios registros; la caché del navegador evita volver a leer lo que no cambió.</td></tr>
+    <tr><td>Escrituras por día</td><td>20 000</td><td>Una jornada intensa de captura usa unos cientos.</td></tr>
+    <tr><td>Cuentas de usuario</td><td>Sin costo para correo/contraseña</td><td>Alrededor de 40 personas.</td></tr>
+  </tbody></table></div>
+  <p class="muted">Firebase Storage (para archivos) ya pide el plan de pago en proyectos nuevos; por eso el sistema guarda los archivos dentro de Firestore o como enlace a Drive/Classroom. Los límites pueden cambiar: consulta la página de precios de Firebase si el plantel crece. Alternativa equivalente si algún día se requiere: Supabase (también gratuito, con base de datos PostgreSQL).</p></div>
+</section>
+
+<section class="part" id="problemas">
+  <div class="card"><h2>Problemas comunes</h2>
+  <div class="tw"><table><thead><tr><th>Lo que ves</th><th>Qué hacer</th></tr></thead><tbody>
+    <tr><td>Pantalla “Cargando SIAP…” que no avanza al abrir el archivo con doble clic</td><td>Ábrelo desde la dirección de GitHub Pages o con Live Server. Los módulos JS no funcionan desde <code>file://</code>.</td></tr>
+    <tr><td>“Falta configurar Firebase”</td><td>Revisa que pegaste el <code>firebaseConfig</code> completo en <code>js/config.js</code>.</td></tr>
+    <tr><td><code>auth/unauthorized-domain</code></td><td>Paso 6: agrega tu dominio de GitHub Pages.</td></tr>
+    <tr><td>“No tienes permiso para esta acción”</td><td>Revisa los roles de esa persona y que el correo de las reglas coincida con <code>superAdminEmail</code>.</td></tr>
+    <tr><td>Cambié <code>config.js</code> y no se nota</td><td>GitHub Pages tarda 1–2 minutos; recarga con Ctrl + Shift + R.</td></tr>
+    <tr><td>Quiero pasar lo capturado en modo local a la nube</td><td>En modo local: Administración → Respaldo → Descargar. En modo Firebase (como apoyo): Administración → Respaldo → Subir respaldo local a la nube.</td></tr>
+  </tbody></table></div></div>
+</section>
+</main>
+</div>
+</body></html>
