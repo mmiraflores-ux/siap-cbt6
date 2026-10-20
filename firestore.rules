@@ -12,7 +12,7 @@ service cloud.firestore {
     // ---------- identidad y roles ----------
     function signed()   { return request.auth != null; }
     function email()    { return request.auth.token.email.lower(); }
-    function isSuper()  { return signed() && email() == 'TU_CORREO@ejemplo.com'; }
+    function isSuper()  { return signed() && email() == 'm.miraflores@gmail.com'; }
     function uPath()    { return /databases/$(database)/documents/usuarios/$(request.auth.uid); }
     function hasU()     { return signed() && exists(uPath()); }
     function u()        { return get(uPath()).data; }
