@@ -7,7 +7,7 @@
                       y se sincronizan EN TIEMPO REAL entre todos.
    ============================================================= */
 window.APP_CONFIG = {
-  mode: "local",
+  mode: "firebase",
 
   // Pega aquí el bloque "firebaseConfig" que te da Firebase
   // (Consola de Firebase → Configuración del proyecto → Tus apps → Web).
