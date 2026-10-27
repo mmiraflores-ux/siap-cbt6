@@ -15,8 +15,18 @@ let unsubs = [], renderT = null, dirty = false, pendingRefresh = false;
 
 /* ======================= ARRANQUE ======================= */
 async function boot() {
+  if (!window.APP_CONFIG) {
+    root.innerHTML = `<div class="login"><div class="box"><div class="seal">CBT6</div><h1>El archivo config.js tiene un error</h1>
+      <p class="muted">El navegador no pudo leer <code>js/config.js</code>. Suele pasar cuando se pegan también las líneas <code>import …</code> o <code>initializeApp(…)</code> que muestra Firebase, o cuando falta una coma o una llave.</p>
+      <p class="note info">Usa la <a href="guia-instalacion.html#generador">guía → Generador de config.js</a> y reemplaza todo el archivo con lo que te genere.</p></div></div>`;
+    return;
+  }
   try {
-    if (CFG.mode === "firebase" && !CFG.firebaseConfig?.apiKey) return renderConfigError();
+    if (CFG.mode === "firebase") {
+      const fc = resolverFirebaseConfig();
+      if (!fc) return renderConfigError();
+      CFG.firebaseConfig = fc;
+    }
     S.store = await createStore(CFG, SEED);
     S.store.onAuth(onAuthChange);
   } catch (e) {
@@ -26,10 +36,23 @@ async function boot() {
   }
 }
 
+/* Acepta los datos de Firebase aunque se hayan pegado en otro lugar del archivo:
+   dentro de APP_CONFIG, anidados por error, o como "const firebaseConfig = {...}" suelto. */
+function resolverFirebaseConfig() {
+  const ok = o => o && typeof o === "object" && String(o.apiKey || "").trim() && String(o.projectId || "").trim();
+  const cands = [CFG.firebaseConfig, CFG.firebaseConfig?.firebaseConfig, CFG.config, window.firebaseConfig];
+  try { cands.push(firebaseConfig); } catch {}          // variable global suelta (const/let/var)
+  return cands.find(ok) || null;
+}
 function renderConfigError() {
-  root.innerHTML = `<div class="login"><div class="box"><div class="seal">CBT6</div><h1>Falta configurar Firebase</h1>
-  <p class="muted">El archivo <code>js/config.js</code> tiene <code>mode: "firebase"</code> pero no contiene tu <code>firebaseConfig</code>.</p>
-  <p class="note info">Sigue la <a href="guia-instalacion.html">guía de instalación</a> (paso 4) o cambia temporalmente a <code>mode: "local"</code> para probar.</p></div></div>`;
+  const fc = CFG.firebaseConfig || {};
+  const campos = ["apiKey", "authDomain", "projectId", "storageBucket", "messagingSenderId", "appId"];
+  const filas = campos.map(k => `<tr><td><code>${k}</code></td><td>${String(fc[k] || "").trim() ? "✔ con dato" : "<b style='color:var(--rojo)'>✘ vacío</b>"}</td></tr>`).join("");
+  root.innerHTML = `<div class="login"><div class="box" style="max-width:560px"><div class="seal">CBT6</div><h1>Falta configurar Firebase</h1>
+  <p class="muted">El archivo <code>js/config.js</code> tiene <code>mode: "firebase"</code>, pero el sistema no encontró los datos de tu proyecto. Esto es lo que leyó:</p>
+  <div class="tw"><table><tbody>${filas}</tbody></table></div>
+  <p class="note info"><b>Solución rápida:</b> abre la <a href="guia-instalacion.html#generador">guía de instalación → Generador de config.js</a>, pega el bloque que te da Firebase y copia el archivo completo que te genera. Después reemplaza todo el contenido de <code>js/config.js</code> con él.</p>
+  <p class="faint" style="font-size:.8rem">Causa más común: se pegó <code>const firebaseConfig = {…}</code> fuera de <code>window.APP_CONFIG</code>, o quedaron las comillas vacías <code>apiKey: ""</code>.</p></div></div>`;
 }
 
 async function onAuthChange(u) {
@@ -180,6 +203,8 @@ function renderLogin(err) {
     const quick = [["p-georgina-garces-rodriguez", "Subdirectora"], ["p-marco-eric-miraflores-rama", "Apoyo a Subdirección"], ["p-sandivel-borja-jaimes", "Docente + apoyo"], ["p-evelin-carbajal-garcia", "Docente"], ["p-arlaet-mendez-gomora", "Orientadora"]];
     root.innerHTML = `<div class="login"><div class="box"><div class="seal">CBT6</div>
       <h1>SIAP · Modo de prueba</h1><p class="muted">Los datos se guardan solo en este navegador. Elige con qué persona entrar para probar los permisos de cada rol.</p>
+      ${CFG.firebaseConfig?.apiKey ? `<p class="note err"><b>Ya pegaste los datos de Firebase, pero falta un cambio.</b> En <code>js/config.js</code> la línea dice <code>mode: "local"</code>; cámbiala a <code>mode: "firebase"</code>, guarda y recarga esta página.</p>`
+        : `<p class="note info">¿Buscas la pantalla para <b>crear tu cuenta</b> (paso 7)? Aparece solo cuando <code>js/config.js</code> tiene <code>mode: "firebase"</code> y los datos de tu proyecto (paso 4).</p>`}
       ${err ? `<p class="note err">${esc(err)}</p>` : ""}
       <div class="f"><label>Entrar como</label><select id="lp">${ps.map(p => opt(p.id, `${p.nombre} — ${p.roles.map(r => ROLES[r] || r).join(", ") || "sin rol"}`)).join("")}</select></div>
       <div class="row"><button class="btn pri" data-act="loginLocal">Entrar</button><button class="btn" data-act="loginLocal" data-admin="1">Administrador técnico</button></div>
