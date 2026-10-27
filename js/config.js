@@ -23,7 +23,7 @@ window.APP_CONFIG = {
 
   // Correo de la persona que administra técnicamente el sistema.
   // Debe ser EXACTAMENTE el mismo que escribas en las reglas de Firestore.
-  superAdminEmail: "",
+  superAdminEmail: "m.miraflores@gmail.com",
 
   institucion: {
     nombre: "CBT No. 6 Gerardo Linares Terrón",
