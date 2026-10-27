@@ -7,17 +7,18 @@
                       y se sincronizan EN TIEMPO REAL entre todos.
    ============================================================= */
 window.APP_CONFIG = {
-  mode: "local",
+  mode: "firebase",
 
   // Pega aquí el bloque "firebaseConfig" que te da Firebase
   // (Consola de Firebase → Configuración del proyecto → Tus apps → Web).
   firebaseConfig: {
-    apiKey: "",
-    authDomain: "",
-    projectId: "",
-    storageBucket: "",
-    messagingSenderId: "",
-    appId: ""
+  apiKey: "AIzaSyCFq74BZ3N4C_lGfjnvjD-MnXtiYN5A8Ig",
+  authDomain: "siap-cbt6.firebaseapp.com",
+  projectId: "siap-cbt6",
+  storageBucket: "siap-cbt6.firebasestorage.app",
+  messagingSenderId: "558315685142",
+  appId: "1:558315685142:web:7f9550a98eef9bfc3afc37",
+  measurementId: "G-XSS1YM7B9D"
   },
 
   // Correo de la persona que administra técnicamente el sistema.
