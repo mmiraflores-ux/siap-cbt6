@@ -77,6 +77,13 @@ export const errMsg = e => {
   if (c.includes("email-already-in-use")) return "Ese correo ya tiene cuenta. Usa 'Iniciar sesión'.";
   if (c.includes("weak-password")) return "La contraseña debe tener al menos 6 caracteres.";
   if (c.includes("unavailable")) return "Sin conexión: el cambio se enviará cuando regrese internet.";
+  if (c.includes("operation-not-allowed")) return "Firebase todavía no permite entrar con correo y contraseña. En la consola de Firebase: Authentication → Sign-in method → Correo electrónico/contraseña → Habilitar → Guardar (paso 2 de la guía).";
+  if (c.includes("unauthorized-domain")) return `Este dominio (${location.hostname}) no está autorizado en Firebase. Agrégalo en Authentication → Configuración → Dominios autorizados (paso 6 de la guía).`;
+  if (c.includes("configuration-not-found")) return "Authentication no está iniciado en tu proyecto. En la consola de Firebase abre Authentication y pulsa “Comenzar” (paso 2 de la guía).";
+  if (c.includes("invalid-api-key") || c.includes("api-key-not-valid")) return "La apiKey de js/config.js no es válida. Vuelve a generar el archivo con el generador de la guía (paso 4).";
+  if (c.includes("invalid-email")) return "El correo no tiene un formato válido.";
+  if (c.includes("too-many-requests")) return "Demasiados intentos seguidos. Espera unos minutos o usa “Recuperar”.";
+  if (c.includes("network-request-failed")) return "No hay conexión con Firebase. Revisa tu internet.";
   return e?.message || String(e);
 };
 

@@ -66,23 +66,47 @@ async function onAuthChange(u) {
   } catch (e) { console.error(e); toast(errMsg(e), true); renderLogin(errMsg(e)); }
 }
 
+/* superAdminEmail acepta un correo, varios separados por coma, o una lista ["a@x.com","b@x.com"] */
+export function adminEmails() {
+  const v = CFG.superAdminEmail;
+  return (Array.isArray(v) ? v : String(v || "").split(/[,;\s]+/)).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+}
 async function resolveFirebaseUser(u) {
-  const st = S.store, sup = (CFG.superAdminEmail || "").toLowerCase();
+  const st = S.store, admins = adminEmails(), sup = admins.join(", "), esAdmin = admins.includes(u.email);
   let doc = await st.get("usuarios", u.uid).catch(() => null);
   if (!doc) {
     const inv = await st.get("invitaciones", u.email).catch(() => null);
     if (inv) { doc = { email: u.email, personaId: inv.personaId, roles: inv.roles, creado: nowISO() }; await st.set("usuarios", u.uid, doc, false); }
-    else if (u.email === sup) { doc = { email: u.email, personaId: "", roles: ["admin"], creado: nowISO() }; await st.set("usuarios", u.uid, doc, false); }
+    else if (esAdmin) {
+      doc = { email: u.email, personaId: "", roles: ["admin"], creado: nowISO() };
+      try { await st.set("usuarios", u.uid, doc, false); }
+      catch (e) {
+        if (String(e.code).includes("permission-denied")) {
+          root.innerHTML = `<div class="login"><div class="box"><div class="seal">CBT6</div><h1>Revisa las reglas de Firestore</h1>
+          <p>Tu correo <b>${esc(u.email)}</b> sí es el administrador en <code>js/config.js</code>, pero las reglas de seguridad no lo reconocen.</p>
+          <p class="note info">En Firebase → Firestore Database → <b>Reglas</b>, busca la línea <code>function isSuper()</code> y verifica que la lista incluya exactamente <code>'${esc(u.email)}'</code> (en minúsculas). Pulsa <b>Publicar</b>, espera 1 minuto y vuelve a entrar.</p>
+          <button class="btn pri" id="lo">Cerrar sesión</button></div></div>`;
+          $("#lo").onclick = () => st.logout(); return null;
+        }
+        throw e;
+      }
+    }
     else {
       root.innerHTML = `<div class="login"><div class="box"><div class="seal">CBT6</div><h1>Cuenta pendiente de habilitar</h1>
       <p>Tu cuenta <b>${esc(u.email)}</b> se creó correctamente, pero la Subdirección aún no ha registrado tu correo en el sistema.</p>
       <p class="note info">Pide al administrador que capture este correo en <b>Administración → Usuarios y roles</b>. Después vuelve a entrar.</p>
-      <button class="btn pri" id="lo">Cerrar sesión</button></div></div>`;
+      <details style="margin:10px 0"><summary class="muted" style="cursor:pointer;font-size:.85rem">¿Tú eres el administrador técnico?</summary>
+      <p style="font-size:.86rem">El sistema compara tu correo con los administradores de <code>superAdminEmail</code> en <code>js/config.js</code>:</p>
+      <div class="tw"><table><tbody><tr><td>Correo con el que entraste</td><td><code>${esc(u.email)}</code></td></tr>
+      <tr><td>Administradores en config.js</td><td>${sup ? `<code>${esc(sup)}</code>` : `<b style="color:var(--rojo)">vacío</b>`}</td></tr></tbody></table></div>
+      <p style="font-size:.86rem">Si no son iguales, corrige <code>superAdminEmail</code> en GitHub (o vuelve a usar el generador de la guía), espera 1–2 minutos y pulsa <b>Reintentar</b>.</p></details>
+      <div class="row"><button class="btn pri" id="re">Reintentar</button><button class="btn" id="lo">Cerrar sesión</button></div></div></div>`;
+      $("#re").onclick = () => location.reload();
       $("#lo").onclick = () => st.logout(); return null;
     }
   }
-  if (u.email === sup && !doc.roles.includes("admin")) doc.roles = [...doc.roles, "admin"];
-  if (sup && u.email === sup) { try { if (await st.seedIfEmpty()) toast("Catálogo inicial cargado en la nube."); } catch (e) { console.warn(e); } }
+  if (esAdmin && !doc.roles.includes("admin")) doc.roles = [...doc.roles, "admin"];
+  if (esAdmin) { try { if (await st.seedIfEmpty()) toast("Catálogo inicial cargado en la nube."); } catch (e) { console.warn(e); } }
   return { uid: u.uid, email: u.email, personaId: doc.personaId, roles: doc.roles || [] };
 }
 
@@ -425,7 +449,7 @@ function adminDatos() {
     ${!local && isStaff() ? `<hr><h3>Migrar datos de prueba a la nube</h3><p class="muted">Si capturaste información en modo local, restaura aquí ese respaldo para subirlo a Firestore (no borra lo existente).</p><label class="btn">Subir respaldo local a la nube<input type="file" accept=".json" hidden data-chg="importJSONcloud"></label>` : ""}</div>`;
 }
 function adminConexion() {
-  const sup = CFG.superAdminEmail || "TU_CORREO@ejemplo.com";
+  const sup = adminEmails().join(", ") || "TU_CORREO@ejemplo.com";
   return `<div class="card"><h2>Conexión</h2>
   <p>Modo actual: <b>${S.store.mode === "firebase" ? "Firebase (nube, tiempo real)" : "Local (solo este navegador)"}</b></p>
   ${S.store.mode === "firebase" ? `<p>Proyecto: <code>${esc(CFG.firebaseConfig.projectId)}</code> · Administrador: <code>${esc(sup)}</code></p>` : `<p class="note info">Para trabajar en equipo y en tiempo real configura Firebase siguiendo la <a href="guia-instalacion.html" target="_blank">guía de instalación</a>.</p>`}
