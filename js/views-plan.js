@@ -4,15 +4,17 @@ import {
   isOri, canObserve, me, norm, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, BLOQUES, DIAS, byId
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
-import { analizarPlaneacion, combinar } from "./extractor.js";
+import { analizarPlaneacion, combinar, cerrarLectorImagenes, imagenInstrumento } from "./extractor.js";
+import { listaPendientes, pendientes } from "./tablero.js";
 
 const BL = () => window.BLOOM;
+const TIPOS_INSTR = ["Rúbrica", "Lista de cotejo", "Lista de observación", "Guía de observación", "Escala estimativa o de valoración", "Registro anecdótico", "Diario o bitácora", "Portafolio de evidencias", "Cuestionario o examen", "Instrumento con criterios", "Instrumento en texto", "Instrumento en imagen", "No es instrumento"];
 
 /* ---------------- lectura de planeaciones ---------------- */
 /* Analiza el archivo y devuelve los datos que se guardan en la planeación */
-async function datosDeAnalisis(nombre, buf, preAnalisis) {
+async function datosDeAnalisis(nombre, buf, preAnalisis, opts = {}) {
   let an = preAnalisis;
-  try { an = an || await analizarPlaneacion(nombre, buf); }
+  try { an = an || await analizarPlaneacion(nombre, buf, opts); }
   catch (e) { console.warn(e); return { analisis: { fecha: nowISO(), error: e.message || String(e) } }; }
   const bloom = an.texto ? BL().analizar(an.texto) : null;
   return {
@@ -108,10 +110,10 @@ export function resolverAsignacion(it, parcial, doc) {
   return out;
 }
 
-async function registrarPlaneacion({ asignacionId, parcial, file, enlace, estadoAsociacion, interpretacion, motivos, an }) {
+async function registrarPlaneacion({ asignacionId, parcial, file, enlace, estadoAsociacion, interpretacion, motivos, an, ocr }) {
   const a = A(asignacionId);
   let archivoId = "", nombre = file?.name || "", datos = {};
-  if (file) { const r = await guardarArchivo(file, { docenteId: a?.docenteId || "" }); archivoId = r.id; datos = await datosDeAnalisis(file.name, r.buf, an); }
+  if (file) { const r = await guardarArchivo(file, { docenteId: a?.docenteId || "" }); archivoId = r.id; datos = await datosDeAnalisis(file.name, r.buf, an, { ocr }); }
   const prev = a ? L("planeaciones").filter(x => x.asignacionId === a.id && x.parcial == parcial && x.estado !== "Sustituida") : [];
   const version = prev.length ? Math.max(...prev.map(x => x.version || 1)) + 1 : 1;
   for (const p of prev) await save("planeaciones", p.id, { estado: "Sustituida", sustituidaPor: version }, "nueva versión");
@@ -137,6 +139,8 @@ VIEWS.planeaciones = {
     if (q.grupo) arr = arr.filter(p => p.grupo === q.grupo);
     if (q.doc) arr = arr.filter(p => p.docenteId === q.doc);
     if (q.asoc === "pend") arr = arr.filter(p => p.estadoAsociacion !== "Identificado");
+    if (q.bloom) arr = arr.filter(p => p.bloom?.predominante == q.bloom);
+    if (q.instr) arr = arr.filter(p => (camposPlan(p).estadoInstr || "Sin analizar") === q.instr);
     arr.sort((a, b) => (b.fechaCarga || "").localeCompare(a.fechaCarga || ""));
     setTimeout(() => {
       if (q.carga && isStaff() && !$("#ov")) { dropQ("carga"); ACT.cargaMasiva(); }
@@ -144,13 +148,23 @@ VIEWS.planeaciones = {
     }, 0);
     const docs = [...new Set(L("planeaciones").map(p => p.docenteId).filter(Boolean))].map(P).filter(Boolean).sort((a, b) => a.nombre.localeCompare(b.nombre));
     const BN = BL().NIVELES;
-    return `<div class="card"><div class="card-h"><h2>Planeaciones · ${arr.length}</h2>
+    const pa = +(q.parcial || parcialHoy());
+    const mis = isStaff() || isOri() ? {} : { doc: me() };
+    const nPend = Object.values(pendientes(pa, { ...mis, grupo: q.grupo || "" })).reduce((a, x) => a + x.length, 0);
+    const conImg = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.archivoId && p.instrumentosEval?.pendientesOcr && (isStaff() || p.docenteId === me()));
+    setTimeout(() => { if (q.pend) document.getElementById("pendientesPl")?.setAttribute("open", ""); }, 0);
+    return `<details class="card" id="pendientesPl" ${q.pend ? "open" : ""}><summary style="cursor:pointer;list-style:none"><div class="card-h" style="margin:0"><h2>Materias sin planeación en el sistema · parcial ${pa}</h2>${nPend ? chip(nPend + " pendientes", "a") : chip("Completo", "g")}<small class="muted">Clic para ${q.pend ? "ocultar" : "ver la lista"}</small></div></summary>
+      <div style="margin-top:12px">${q.parcial ? "" : `<p class="faint" style="font-size:.8rem">Se muestra el parcial actual; elige otro en el filtro de abajo.</p>`}${listaPendientes(pa, { ...mis, grupo: q.grupo || "" })}</div></details>
+    ${conImg.length ? `<div class="note info no-print">${conImg.length} planeación(es) tienen instrumentos en imagen sin leer. <button class="btn sm" data-act="leerImagenesPend">Leer instrumentos en imagen</button> <small class="muted">Usa reconocimiento de texto; tarda unos segundos por imagen.</small></div>` : ""}
+    <div class="card"><div class="card-h"><h2>Planeaciones · ${arr.length}</h2>
       ${isStaff() ? `<button class="btn" data-act="reanalizarTodas" title="Vuelve a leer los archivos ya cargados con el lector actual">↻ Analizar de nuevo</button><button class="btn pri" data-act="cargaMasiva">⇪ Carga masiva</button>` : ""}${isDoc() ? `<button class="btn" data-act="subirPlan">+ Subir mi planeación</button>` : ""}</div>
       <p class="muted">Se conserva el archivo original y cada nueva carga crea una versión. El nombre del archivo es solo una ayuda: la asociación se valida contra la asignación académica.</p>
       <div class="filters"><select data-filter="parcial"><option value="">Todos los parciales</option>${[1, 2, 3].map(n => opt(n, "Parcial " + n, q.parcial)).join("")}</select>
       <select data-filter="grupo"><option value="">Todos los grupos</option>${L("grupos").map(g => g.id).sort().map(g => opt(g, "Grupo " + g, q.grupo)).join("")}</select>
       ${isStaff() || isOri() ? `<select data-filter="doc"><option value="">Todas las personas</option>${docs.map(p => opt(p.id, p.nombre, q.doc)).join("")}</select>` : ""}
       <select data-filter="asoc"><option value="">Toda asociación</option>${opt("pend", "Por revisar / no resueltas", q.asoc)}</select>
+      <select data-filter="bloom"><option value="">Todo nivel de Bloom</option>${BN.map(b => opt(b.n, "Bloom: " + b.nombre, q.bloom)).join("")}</select>
+      <select data-filter="instr"><option value="">Todo instrumento</option>${["Incluye instrumento", "Desarrollo parcial", "Solo mencionado", "No identificado", "Sin analizar"].map(e => opt(e, e, q.instr)).join("")}</select>
       <label class="checks"><label><input type="checkbox" ${q.vers ? "checked" : ""} onchange="SIAP_setQ('vers', this.checked?'1':'')"> Ver versiones anteriores</label></label></div>
       <div class="tw"><table><thead><tr><th>Asignación</th><th>Docente</th><th class="num">Parcial</th><th class="num">Ver.</th><th>Archivo</th><th>Asociación</th><th>Bloom predominante</th><th>Instrumentos</th><th>Transversalidad</th><th></th></tr></thead><tbody>
       ${arr.map(p => `<tr><td><b>${esc(p.asignacionId ? alabel(p.asignacionId) : (p.interpretacion?.base || "Sin asociar"))}</b><span class="sub">${esc(short(p.asignacionId ? afull(p.asignacionId) : (p.motivos || []).join("; "), 70))}</span></td>
@@ -166,17 +180,59 @@ window.SIAP_setQ = (k, v) => setQ(k, v);
 export const chipInstr = p => { const e = camposPlan(p).estadoInstr; if (!e) return `<span class="faint">—</span>`; return chip(e, e === "Incluye instrumento" ? "g" : e === "Desarrollo parcial" ? "b" : e === "Solo mencionado" ? "a" : ""); };
 
 /* -------- volver a analizar archivos ya cargados -------- */
-async function reanalizar(p) {
+/* conserva los tipos de instrumento que alguien corrigió a mano */
+function conservarManual(anterior, nuevo) {
+  const man = (anterior?.anexos || []).filter(a => a.tipoManual); if (!man.length || !nuevo?.anexos) return nuevo;
+  const clave = a => a.path || (a.pagina ? `${a.pagina}:${Math.round(a.caja?.y || 0)}` : "") || norm(a.titulo || "");
+  nuevo.anexos.forEach((a, i) => { const m = man.find(x => clave(x) === clave(a)) || (anterior.anexos.length === nuevo.anexos.length ? anterior.anexos[i]?.tipoManual && anterior.anexos[i] : null);
+    if (m) { a.tipo = m.tipo; a.tipoManual = true; if (m.evaluaManual) { a.evalua = m.evalua; a.evaluaManual = true; } } });
+  return nuevo;
+}
+async function reanalizar(p, opts = { ocr: true }) {
   if (!p.archivoId) throw new Error("Esta planeación es un enlace; no hay archivo para analizar.");
   const blob = await S.store.getFile(p.archivoId); if (!blob) throw new Error("No se encontró el archivo original.");
-  const d = await datosDeAnalisis(p.archivoNombre, await blob.arrayBuffer());
+  const d = await datosDeAnalisis(p.archivoNombre, await blob.arrayBuffer(), null, opts);
+  if (d.instrumentosEval) d.instrumentosEval = conservarManual(p.instrumentosEval, d.instrumentosEval);
   await S.store.set("planeaciones", p.id, { ...d, actualizado: nowISO(), actualizadoPor: me() || "" });
   return d;
 }
 ACT.reanalizarUna = async el => {
   const p = byId("planeaciones", el.dataset.id); el.disabled = true; el.textContent = "Analizando…";
-  try { const d = await reanalizar(p); toast(d.analisis?.error ? "No se pudo leer: " + d.analisis.error : "Planeación analizada de nuevo.", !!d.analisis?.error); setTimeout(() => ACT.verPlan({ dataset: { id: p.id } }), 300); }
+  try { const d = await reanalizar(p); await cerrarLectorImagenes(); toast(d.analisis?.error ? "No se pudo leer: " + d.analisis.error : "Planeación analizada de nuevo.", !!d.analisis?.error); setTimeout(() => ACT.verPlan({ dataset: { id: p.id } }), 300); }
   catch (e) { toast(e.message, true); el.disabled = false; el.textContent = "↻ Analizar de nuevo"; }
+};
+/* lee con reconocimiento de texto los instrumentos que están como imagen */
+ACT.leerImagenesPend = async el => {
+  const arr = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.archivoId && p.instrumentosEval?.pendientesOcr && (isStaff() || p.docenteId === me()));
+  if (!arr.length) return toast("No hay imágenes pendientes de leer.");
+  const tot = arr.reduce((a, p) => a + (p.instrumentosEval.pendientesOcr || 0), 0);
+  if (!confirm(`Se leerán ${tot} imagen(es) de ${arr.length} planeación(es). La primera vez se descarga el lector de texto (≈ 15 MB) y cada imagen tarda unos segundos. ¿Continuar?`)) return;
+  el.disabled = true; let ok = 0, err = 0;
+  for (const [i, p] of arr.entries()) { el.textContent = `Leyendo ${i + 1} de ${arr.length}…`; try { const d = await reanalizar(p, { ocr: true }); d.analisis?.error ? err++ : ok++; } catch (e) { console.warn(e); err++; } }
+  await cerrarLectorImagenes();
+  el.disabled = false; el.textContent = "Leer instrumentos en imagen";
+  toast(`${ok} planeación(es) actualizadas${err ? `, ${err} con error` : ""}.`, !!err);
+};
+/* ver la imagen de un instrumento */
+ACT.verImagenInstr = async el => {
+  const p = byId("planeaciones", el.dataset.id), a = p?.instrumentosEval?.anexos?.[+el.dataset.i]; if (!a) return;
+  const box = el.closest("td").querySelector(".instr-img"); if (box.firstChild) { box.innerHTML = ""; el.textContent = "Ver imagen"; return; }
+  el.disabled = true; el.textContent = "Cargando…";
+  try {
+    const blob = await S.store.getFile(p.archivoId); if (!blob) throw new Error("No se encontró el archivo original.");
+    const img = await imagenInstrumento(p.archivoNombre, await blob.arrayBuffer(), a); if (!img) throw new Error("No se pudo recuperar la imagen.");
+    box.innerHTML = `<img src="${URL.createObjectURL(img)}" alt="Instrumento: ${esc(a.titulo || a.tipo)}">${a.textoImagen ? `<details><summary class="muted">Texto leído en la imagen</summary><div class="pre">${esc(a.textoImagen)}</div></details>` : ""}`;
+    el.textContent = "Ocultar imagen";
+  } catch (e) { toast(e.message, true); el.textContent = "Ver imagen"; }
+  el.disabled = false;
+};
+/* corregir a mano el tipo de instrumento identificado */
+ACT.tipoInstr = async el => {
+  const p = byId("planeaciones", el.dataset.id); if (!p?.instrumentosEval) return;
+  const ie = structuredClone(p.instrumentosEval), a = ie.anexos[+el.dataset.i]; if (!a) return;
+  a.tipo = el.value; a.tipoManual = true; if (a.pendienteOcr) { a.pendienteOcr = false; ie.pendientesOcr = ie.anexos.filter(x => x.pendienteOcr).length; }
+  await S.store.set("planeaciones", p.id, { instrumentosEval: ie, actualizado: nowISO(), actualizadoPor: me() || "" });
+  toast("Tipo de instrumento actualizado.");
 };
 ACT.usarParaParciales = async el => {
   const p = byId("planeaciones", el.dataset.id);
@@ -195,6 +251,7 @@ ACT.reanalizarTodas = async el => {
   if (!confirm(`Se volverán a leer ${arr.length} planeaciones con el lector actual. Los campos que alguien corrigió a mano no se modifican. ¿Continuar?`)) return;
   el.disabled = true; let ok = 0, err = 0;
   for (const [i, p] of arr.entries()) { el.textContent = `Analizando ${i + 1} de ${arr.length}…`; try { const d = await reanalizar(p); d.analisis?.error ? err++ : ok++; } catch { err++; } }
+  await cerrarLectorImagenes();
   await audit("análisis de planeaciones", "planeaciones", "lote", { analizadas: ok, errores: err });
   el.disabled = false; el.textContent = "↻ Analizar de nuevo";
   toast(`${ok} planeaciones analizadas${err ? `, ${err} no se pudieron leer` : ""}.`, !!err);
@@ -211,7 +268,7 @@ ACT.subirPlan = el => {
     onSubmit: async (o, f) => {
       const file = $("#pf", f).files[0];
       if (!file && !o.enlace) { toast("Adjunta el archivo o pega un enlace.", true); return false; }
-      const id = await registrarPlaneacion({ asignacionId: o.asignacionId, parcial: o.parcial, file, enlace: o.enlace, estadoAsociacion: "Identificado", interpretacion: file ? interpretarNombre(file.name) : null, motivos: ["Asociación seleccionada manualmente al cargar"] });
+      const id = await registrarPlaneacion({ asignacionId: o.asignacionId, parcial: o.parcial, file, enlace: o.enlace, estadoAsociacion: "Identificado", interpretacion: file ? interpretarNombre(file.name) : null, motivos: ["Asociación seleccionada manualmente al cargar"], ocr: true });
       toast("Planeación registrada."); setTimeout(() => ACT.verPlan({ dataset: { id } }), 300);
     }
   });
@@ -313,7 +370,7 @@ ACT.verPlan = el => {
     <div class="grid g2">${campo("progresion", "Progresión / aprendizaje de trayectoria / propósito formativo")}${campo("proposito", "Propósito / meta de aprendizaje")}${campo("contenidos", "Temas / contenidos")}${campo("estrategias", "Metodologías activas / estrategias didácticas")}</div>
     <div class="card flat" style="margin:4px 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Instrumentos de evaluación</h3>${chipInstr(p)}</div>
       ${ex.evaluacion?.length ? `<p class="muted" style="font-size:.82rem;margin:0 0 4px">Evaluación continua del parcial ${p.parcial}</p><div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Producto / actividad</th><th>Aspectos que se evalúan</th><th>Instrumento</th><th class="num">Ponderación</th><th>¿Desarrollado?</th></tr></thead><tbody>${ex.evaluacion.map(e => `<tr><td>${esc(e.producto || "—")}</td><td>${esc(e.aspectos || "—")}</td><td>${esc(e.instrumento)}</td><td class="num">${esc(e.ponderacion || "")}</td><td>${e.estadoAnexo === "especifico" ? chip("Sí, en anexo", "g") + `<span class="sub">${esc(short(e.anexo, 60))}</span>` : e.estadoAnexo === "otro" ? chip("Solo se nombra", "a") + `<span class="sub">Hay ${esc(e.tipo.toLowerCase())} en anexo, pero para otro producto</span>` : chip("Solo se nombra", "a")}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      ${(ex.anexos || []).length ? `<p class="muted" style="font-size:.82rem;margin:0 0 4px">Instrumentos desarrollados en el documento</p><div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Instrumento</th><th>¿Qué evalúa?</th><th>Criterios identificados</th></tr></thead><tbody>${ex.anexos.map(x => `<tr><td><b>${esc(x.tipo)}</b><span class="sub">${esc(x.titulo || "")}</span></td><td>${esc(x.evalua || "—")}</td><td>${(x.criterios || []).map(esc).join("<br>") || "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${(ex.anexos || []).length ? `<p class="muted" style="font-size:.82rem;margin:0 0 4px">Instrumentos desarrollados en el documento</p><div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Tipo de instrumento</th><th>¿Qué evalúa?</th><th>Contenido</th></tr></thead><tbody>${ex.anexos.map((x, i) => `<tr><td>${edit && ie?.anexos?.[i] ? `<select class="sm" data-chg="tipoInstr" data-id="${p.id}" data-i="${i}" aria-label="Tipo de instrumento">${TIPOS_INSTR.concat(TIPOS_INSTR.includes(x.tipo) ? [] : [x.tipo]).map(t => opt(t, t, x.tipo)).join("")}</select>` : `<b>${esc(x.tipo)}</b>`}${x.tipoManual ? " " + chip("corregido", "b") : x.pendienteOcr ? " " + chip("imagen sin leer", "a") : ""}<span class="sub">${esc(x.titulo || "")}</span></td><td>${esc(x.evalua || "—")}</td><td>${chip(x.fuente === "imagen" ? "Imagen" : x.fuente === "tabla" ? "Tabla" : "Texto")}${(x.criterios || []).length ? `<span class="sub">${x.criterios.map(esc).join("<br>")}</span>` : ""}${x.fuente === "imagen" && p.archivoId ? ` <button type="button" class="btn sm" data-act="verImagenInstr" data-id="${p.id}" data-i="${i}">Ver imagen</button><div class="instr-img"></div>` : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
       ${ie && ie.menciones?.length ? `<details><summary class="muted" style="cursor:pointer;font-size:.85rem">Dónde se mencionan (${ie.menciones.length})</summary>${ie.menciones.map(m => `<p style="font-size:.82rem;margin:4px 0">${chip(m.tipo)} ${esc(m.contexto)}${m.alFinal ? " " + chip("al final del documento", "d") : ""}</p>`).join("")}</details>` : ""}
       ${campo("instrumentos", "Resumen (editable)", true)}</div>
     <div class="card flat" style="margin:0 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Transversalidad curricular</h3>${tv ? chip("Se enviará a PAEC", "b") : chip("No identificada")}</div>

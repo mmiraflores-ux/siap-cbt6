@@ -10,7 +10,8 @@ const LIBS = {
   jszip: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
   xlsx: "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
   pdf: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
-  pdfWorker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"
+  pdfWorker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
+  tesseract: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"
 };
 const cargas = {};
 function lib(url, global) {
@@ -43,7 +44,7 @@ const TRANSV = /^transversalidad/;
 const DATOS = [["asignatura", /^(asignatura ?\/? ?submodulo|asignatura|submodulo|uac|unidad de aprendizaje curricular)$/], ["docente", /^(nombre del o la docente|nombre del docente|docente)$/], ["grupo", /^grupo$/], ["semestre", /^semestre$/]];
 const PARCIAL_RE = /^(primer|segundo|tercer)o? parcial$/;
 const NUMP = { primer: 1, primero: 1, segundo: 2, tercer: 3, tercero: 3 };
-const OTROS = /^(actividades?|apertura|inicio|desarrollo|cierre|recursos?|materiales?|productos?( esperados?)?|evidencias?|bibliografia|referencias|fecha|docente|nombre|grupo|semestre|sesion(es)?|duracion|tiempo|competencias?|habilidades|campo|uac|asignatura|submodulo|modulo|parcial|plantel|ciclo|categorias?|subcategorias?|ambitos?|recursos sociocognitivos|areas? de conocimiento|observaciones|firma|vo\.? ?bo|elaboro|reviso|ponderacion|criterios?( de evaluacion)?|valor|puntaje|horas|no\.?|num)\b/;
+const OTROS = /^(actividades?|apertura|inicio|desarrollo|cierre|recursos?|materiales?|productos?( esperados?)?|evidencias?|bibliografia|referencias|fecha|docente|nombre|grupo|semestre|sesion(es)?|duracion|tiempo|competencias?|habilidades|campo|uac|asignatura|submodulo|modulo|parcial|plantel|ciclo|categorias?|subcategorias?|ambitos?|recursos sociocognitivos|areas? de conocimiento|observaciones|firma|vo\.? ?bo|elaboro|reviso|ponderacion|criterios?( de evaluacion)?|valor|puntaje|horas|no\.?|num|numero de horas|periodo de (ejecucion|aplicacion)|recursos materiales|grado|carrera|ciclo escolar|horas ?\/ ?semana)\b/;
 
 function etiqueta(txt) {
   const raw = String(txt || "").trim(); if (!raw) return null;
@@ -59,7 +60,7 @@ function etiqueta(txt) {
   for (const c of CAMPOS) if (c.re.test(t)) return { k: c.k, resto: "" };
   if (TRANSV.test(t)) return { k: "transversalidad", resto: "" };
   for (const [k, re] of DATOS) if (re.test(t)) return { k, resto: "" };
-  if (t.length < 40 && OTROS.test(t)) return { k: "_otro", resto: "" };
+  if (t.length < 80 && OTROS.test(t)) return { k: "_otro", resto: "" };
   return null;
 }
 
@@ -278,7 +279,16 @@ async function leerDocx(buf) {
   if (!body) throw new Error("No se pudo leer el contenido del documento.");
   const items = [], lineas = [], segmentos = []; let previo = "", parcial = 0;
   const esParcial = t => { const m = n(t).match(PARCIAL_RE); return m ? NUMP[m[1]] : 0; };
+  // imágenes: r:embed → word/media/…
+  const relsXml = await zip.file("word/_rels/document.xml.rels")?.async("string") || "";
+  const rels = {}; new DOMParser().parseFromString(relsXml, "application/xml").querySelectorAll("Relationship").forEach(r => rels[r.getAttribute("Id")] = r.getAttribute("Target"));
+  const imagenesDe = el => [...el.getElementsByTagName("*")].filter(e => e.localName === "blip").map(b => rels[b.getAttribute("r:embed") || b.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed")]).filter(t => t && /\.(png|jpe?g|gif|bmp|webp)$/i.test(t)).map(t => "word/" + t.replace(/^\/?word\//, ""));
+  let seccion = null;                                       // todo lo que sigue al título “Instrumentos de evaluación”
   hijos(body).forEach(el => {
+    if (seccion) {
+      if (el.localName === "tbl") seccion.push({ tipo: "tabla", M: matrizDocx(el), imagenes: imagenesDe(el) });
+      else if (el.localName === "p") { textoP(el).split("\n").filter(Boolean).forEach(txt => seccion.push({ tipo: "texto", txt })); imagenesDe(el).forEach(path => seccion.push({ tipo: "imagen", path })); }
+    } else if (el.localName === "p" && HEAD_INSTR.test(n(textoP(el)))) seccion = [];
     if (el.localName === "tbl") {
       const M = matrizDocx(el); items.push({ tabla: true, M, previo, parcial }); previo = "";
       let ini = 0;                                          // partir la tabla donde empieza otro parcial
@@ -290,7 +300,8 @@ async function leerDocx(buf) {
     }
   });
   const matrices = [...doc.getElementsByTagName("*")].filter(e => e.localName === "tbl").map(matrizDocx);
-  return { items, matrices, segmentos, texto: lineas.join("\n") };
+  const imagen = async path => { const f = zip.file(path); if (!f) return null; const ext = path.split(".").pop().toLowerCase(); return new Blob([await f.async("arraybuffer")], { type: "image/" + (ext === "jpg" ? "jpeg" : ext) }); };
+  return { items, matrices, segmentos, texto: lineas.join("\n"), seccion, imagen };
 }
 async function leerXlsx(buf) {
   const X = await lib(LIBS.xlsx, "XLSX");
@@ -317,10 +328,44 @@ async function leerPdf(buf) {
   }
   if (!raw.length) throw new Error("El PDF no contiene texto (puede ser una imagen escaneada). Sube la versión en Word o captura los campos a mano.");
   const plantilla = leerPlantillaPdf(raw);
+  // imágenes que aparecen después del título “Instrumentos de evaluación”
+  let seccion = null;
+  const H = plantilla.instrHead;
+  if (H) {
+    // si los instrumentos tienen títulos reconocibles se usan esos; si no, el texto que sigue al título es el instrumento
+    seccion = (plantilla.anexosTrasInstr || []).length ? [] : (plantilla.textoTrasInstr || []).map(txt => ({ tipo: "texto", txt }));
+    const OPS = pdfjs.OPS;
+    for (let p = H.p; p <= Math.min(pdf.numPages, 60); p++) {
+      const pg = await pdf.getPage(p); const alto = pg.getViewport({ scale: 1 }).height;
+      let ol; try { ol = await pg.getOperatorList(); } catch (e) { console.warn("No se pudieron localizar imágenes en el PDF", e); break; }
+      let ctm = [1, 0, 0, 1, 0, 0]; const pila = [];
+      const mul = (m, t) => [m[0] * t[0] + m[2] * t[1], m[1] * t[0] + m[3] * t[1], m[0] * t[2] + m[2] * t[3], m[1] * t[2] + m[3] * t[3], m[0] * t[4] + m[2] * t[5] + m[4], m[1] * t[4] + m[3] * t[5] + m[5]];
+      ol.fnArray.forEach((fn, i) => {
+        if (fn === OPS.save) pila.push(ctm.slice()); else if (fn === OPS.restore) ctm = pila.pop() || ctm;
+        else if (fn === OPS.transform) ctm = mul(ctm, ol.argsArray[i]);
+        else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintJpegXObject) {
+          const w = Math.abs(ctm[0]) || Math.abs(ctm[2]), h = Math.abs(ctm[3]) || Math.abs(ctm[1]);
+          const top = alto - (ctm[5] + Math.max(0, ctm[3])); const caja = { x: ctm[4], y: top, w, h };
+          if (w < 120 || h < 80) return;                     // logotipos y adornos
+          if (p === H.p && top < H.y) return;
+          seccion.push({ tipo: "imagen", pagina: p, caja });
+        }
+      });
+    }
+  }
+  const imagen = async a => {                              // recorta la imagen de la página para leerla
+    if (!a.pagina) return null;
+    const pg = await pdf.getPage(a.pagina); const esc = 2.2; const vp = pg.getViewport({ scale: esc });
+    const cv = document.createElement("canvas"); cv.width = vp.width; cv.height = vp.height;
+    await pg.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+    const c2 = document.createElement("canvas"); c2.width = Math.max(1, a.caja.w * esc); c2.height = Math.max(1, a.caja.h * esc);
+    c2.getContext("2d").drawImage(cv, a.caja.x * esc, a.caja.y * esc, a.caja.w * esc, a.caja.h * esc, 0, 0, c2.width, c2.height);
+    return c2;
+  };
   const lineas = plantilla.texto.split("\n").filter(Boolean);
   let parcial = 0;
   const items = lineas.map(txt => { const m = n(txt).match(/^(primer|segundo|tercer)o? parcial\b/); if (m) parcial = NUMP[m[1]]; return { txt, parcial }; });
-  return { items, matrices: [], texto: plantilla.texto, plantilla };
+  return { items, matrices: [], texto: plantilla.texto, plantilla, seccion, imagen };
 }
 
 /* ---------- tabla de evaluación continua en Word/Excel ---------- */
@@ -332,12 +377,108 @@ function evaluacionMatriz(M) {
     const cI = cols[iI][0], cP = cols[iP][0];
     const cProd = cols.find(([, x]) => /productos? de aprendizaje/.test(n(x.txt)))?.[0]; const cAsp = cols.find(([, x]) => /aspectos/.test(n(x.txt)))?.[0];
     for (let i = r + 1; i < M.length; i++) {
-      const ins = M[i]?.[cI]?.txt || ""; if (/^total/.test(n(distintas(M[i]).map(x => x.txt).join(" ")))) break;
+      const ins = M[i]?.[cI]?.txt || ""; if (distintas(M[i]).some(x => /^total:?$/.test(n(x.txt)))) break;
       if (!ins.trim() || M[i - 1]?.[cI] === M[i][cI]) continue;
       out.push({ producto: cProd != null ? M[i][cProd]?.txt || "" : "", aspectos: cAsp != null ? M[i][cAsp]?.txt || "" : "", instrumento: ins, ponderacion: M[i][cP]?.txt || "", tipo: tipoInst(n(ins)) || "" });
     }
     break;
   }
+  return out;
+}
+
+/* ---------- Instrumentos de evaluación: clasificación por título o estructura ---------- */
+export const HEAD_INSTR = /^(anexos?:? )?instrumentos? de evaluacion( utilizados)?:?$/;
+const RUIDO_INSTR = /(subsecretaria|direccion general|direccion de bachillerato|subdireccion regional|supervision escolar|ano del humanismo|gobierno del|estado de mexico|el poder de servir|prolongacion de independencia|correo electronico|cbt no\.? ?6|calacoman)/;
+export function clasificarInstrumento(texto) {
+  const lineas = String(texto || "").split(/\n+/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => l.length > 2 && !RUIDO_INSTR.test(n(l)));
+  const t = n(lineas.join("\n"));
+  const reglas = [
+    ["Rúbrica", /r\W?[uú]\W?b\W?r\W?i\W?c\W?a|\brubric/], ["Lista de cotejo", /listas? de cotejo|che?c?k\s*-?\s*list|checklist/],
+    ["Lista de observación", /listas? de observacion/], ["Guía de observación", /guias? de observacion/],
+    ["Escala estimativa o de valoración", /escalas? (estimativas?|de valoracion|de likert|likert|de rango|de apreciacion)/],
+    ["Registro anecdótico", /registros? anecdoticos?/], ["Diario o bitácora", /diarios? de (clase|campo|aprendizaje)|bitacoras?/],
+    ["Portafolio de evidencias", /portafolios? de evidencias?/], ["Cuestionario o examen", /^(cuestionario|examen)/m]
+  ];
+  let tipo = "", pos = Infinity, re0 = null;
+  reglas.forEach(([k, re]) => { const m = t.match(re); if (m && m.index < pos) { pos = m.index; tipo = k; re0 = re; } });
+  if (!tipo) {                                               // por estructura
+    if (/\bsi\b[\s|]{0,12}\bno\b/.test(t) || /no cumple|cumple/.test(t)) tipo = "Lista de cotejo";
+    else if (/(criterios?|indicador|aspecto)/.test(t) && /(excelente|bien|suficiente|insuficiente|necesita apoyo|sobresaliente|satisfactorio|puntos|\(\d+ ?pts?\))/.test(t)) tipo = "Rúbrica";
+  }
+  const ETIQ = /^(nombre|grado|grupo|fecha|tema|asignatura|semestre|docente|competencia|alumno|estudiante|plantel|ciclo|parcial|calificacion|puntaje)\b/;
+  const etiquetas = l => (n(l).match(/\b(nombre|grado|grupo|fecha|semestre?|docente|alumno|estudiante|calificacion)\b\s*[:=]/g) || []).length;
+  // el título es el renglón donde aparece el nombre del instrumento (no el primero que contenga una palabra parecida)
+  const idx = re0 ? lineas.findIndex(l => re0.test(n(l))) : -1;
+  let titulo = idx >= 0 && lineas[idx].length < 160 && etiquetas(lineas[idx]) < 2 ? lineas[idx]
+    : (lineas.find(l => l.length > 10 && l.length < 120 && l === l.toUpperCase() && !ETIQ.test(n(l)) && etiquetas(l) === 0 && !/\bmexico\b/.test(n(l)) && new Set(n(l).split(" ").filter(w => w.length >= 4)).size >= 2) || "");
+  titulo = titulo.replace(/^[\W\d]+/, "").replace(/\s*[|]\s*$/, "").trim();
+  let evalua = "";
+  const m1 = titulo.match(/:\s*(.+)$/), m2 = n(titulo).match(/\b(para evaluar|para valorar|de evaluacion de|de)\s+(.+)$/), m3 = lineas.join(" ").match(/evaluar (?:la|el) (?:actividad|producto|trabajo)?\s*['"“‘]?([^'"”’.]{4,80})/i);
+  if (m1 && !ETIQ.test(n(m1[1])) && m1[1].length > 3) evalua = m1[1]; else if (m3) evalua = m3[1]; else if (m2 && tipo) evalua = titulo.slice(titulo.length - m2[2].length);
+  if (ETIQ.test(n(evalua)) || etiquetas(evalua)) evalua = "";
+  return { tipo, titulo: titulo.slice(0, 160), evalua: evalua.trim().slice(0, 160) };
+}
+let ocrWorker = null;
+/* amplía y pasa a grises: el OCR lee mucho mejor los encabezados pequeños */
+async function preparaImagen(img) {
+  let src = img, tam = img.size || 0;
+  if (img instanceof Blob) src = await createImageBitmap(img);
+  const w = src.width, h = src.height, f = Math.min(3, Math.max(1, 2000 / Math.max(1, w)));
+  const cv = document.createElement("canvas"); cv.width = Math.round(w * f); cv.height = Math.round(h * f);
+  const cx = cv.getContext("2d"); cx.filter = "grayscale(1) contrast(1.15)"; cx.drawImage(src, 0, 0, cv.width, cv.height);
+  cv.dataset.tam = tam || img.dataset?.tam || "";
+  return cv;
+}
+export async function textoDeImagen(img) {
+  const T = await lib(LIBS.tesseract, "Tesseract");
+  if (!ocrWorker) ocrWorker = await T.createWorker("spa");
+  const r = await ocrWorker.recognize(await preparaImagen(img));
+  return r?.data?.text || "";
+}
+/* Devuelve la imagen de un instrumento (para verla en pantalla) */
+export async function imagenInstrumento(nombre, buf, a) {
+  const ext = String(nombre || "").toLowerCase().split(".").pop();
+  const L = ext === "docx" ? await leerDocx(buf) : ext === "pdf" ? await leerPdf(buf) : null;
+  if (!L?.imagen) return null;
+  const img = await (a.path ? L.imagen(a.path) : L.imagen(a)); if (!img) return null;
+  if (img instanceof Blob) return img;
+  return await new Promise(r => img.toBlob(r, "image/png"));
+}
+export async function cerrarLectorImagenes() { if (ocrWorker) { try { await ocrWorker.terminate(); } catch {} ocrWorker = null; } }
+
+/* Convierte la sección posterior al título en una lista de instrumentos */
+async function instrumentosDeSeccion(bloques, { imagen, ocr }) {
+  const out = []; let pend = [];
+  const titulo = () => pend.slice().reverse().find(l => l.length > 3 && l.length < 160 && !RUIDO_INSTR.test(n(l))) || "";
+  for (const b of bloques) {
+    if (b.tipo === "texto") { if (!RUIDO_INSTR.test(n(b.txt))) pend.push(b.txt); continue; }
+    if (b.tipo === "tabla") {
+      const M = b.M; let h = 0, tit = titulo();
+      if (distintas(M[0]).length === 1) { tit = M[0][0]?.txt.split("\n")[0] || tit; h = 1; }
+      const textoTabla = M.slice(0, 3).map(r => distintas(r).map(x => x.txt).join(" | ")).join("\n");
+      const c = clasificarInstrumento([...pend, textoTabla].join("\n"));
+      const crit = []; for (let i = h + 1; i < M.length && crit.length < 12; i++) { const x = columnas(M[i])[0]?.[1]; const v = (x?.txt || "").split("\n")[0].trim(); if (v && !/^(total|puntaje|calificacion)/.test(n(v)) && !crit.includes(v)) crit.push(v.length > 80 ? v.slice(0, 77) + "…" : v); }
+      out.push({ fuente: "tabla", tipo: c.tipo || "Instrumento con criterios", titulo: (tit || c.titulo).slice(0, 160), evalua: c.evalua, criterios: crit, filas: crit.length });
+      (b.imagenes || []).forEach(path => out.push({ fuente: "imagen", path, tipo: "", titulo: "", evalua: "", criterios: [] }));
+      pend = []; continue;
+    }
+    if (b.tipo === "imagen") { const c = clasificarInstrumento(pend.join("\n")); out.push({ fuente: "imagen", path: b.path, pagina: b.pagina, caja: b.caja, tipo: c.tipo, titulo: c.titulo || titulo(), evalua: c.evalua, criterios: [], seguida: !pend.some(l => l.trim().length > 3) && out.length > 0 && out[out.length - 1].fuente === "imagen" }); pend = []; }
+  }
+  if (pend.length && pend.join(" ").length > 20) { const c = clasificarInstrumento(pend.join("\n")); out.push({ fuente: "texto", tipo: c.tipo || "Instrumento en texto", titulo: c.titulo || pend[0].slice(0, 160), evalua: c.evalua, criterios: pend.slice(1, 9).map(l => l.slice(0, 80)) }); }
+  // leer el texto de cada imagen
+  for (const a of out.filter(x => x.fuente === "imagen")) {
+    if (!ocr) { a.pendienteOcr = true; if (!a.tipo) a.tipo = "Instrumento en imagen"; continue; }
+    try {
+      const img = await imagen(a); if (!img) throw new Error("imagen no disponible");
+      const txt = await textoDeImagen(img); const c = clasificarInstrumento(txt);
+      a.tipo = c.tipo || a.tipo || "Instrumento en imagen"; a.titulo = c.titulo || a.titulo; a.evalua = c.evalua || a.evalua;
+      a.textoImagen = txt.replace(/\s+/g, " ").trim().slice(0, 600); a.pendienteOcr = false;
+    } catch (e) { a.pendienteOcr = true; a.errorOcr = e.message; if (!a.tipo) a.tipo = "Instrumento en imagen"; }
+  }
+  // una imagen sin título propia, pegada a la anterior, es la continuación del mismo instrumento
+  out.forEach((a, i) => { const prev = out[i - 1];
+    if (a.seguida && !a.pendienteOcr && a.tipo === "Instrumento en imagen" && prev && prev.fuente === "imagen" && prev.tipo && prev.tipo !== "Instrumento en imagen") {
+      a.tipo = prev.tipo; a.titulo = (prev.titulo || prev.tipo).replace(/ \(continuación\)$/, "") + " (continuación)"; a.evalua = a.evalua || prev.evalua; a.continuacion = true; } });
   return out;
 }
 
@@ -356,7 +497,7 @@ function mismoProducto(producto, anexo) {
 export function combinar(an, parcial) {
   const G = an?.generales || {}, P = (an?.porParcial || {})[parcial] || {};
   const une = (...xs) => xs.filter(x => x && String(x).trim()).join("\n\n");
-  const anexos = an?.instrumentos?.anexos || [], menciones = an?.instrumentos?.menciones || [];
+  const anexos = (an?.instrumentos?.anexos || []).filter(a => a.tipo !== "No es instrumento"), menciones = an?.instrumentos?.menciones || [];
   // cada producto se relaciona con el anexo que realmente lo evalúa (mismo tipo y mismo producto)
   const evaluacion = (P.evaluacion || G.evaluacion || []).map(e => {
     const delTipo = anexos.filter(a => a.tipo && a.tipo === e.tipo);
@@ -366,11 +507,13 @@ export function combinar(an, parcial) {
   const usados = [...new Set(evaluacion.map(e => e.tipo).filter(Boolean))];
   const tiposMenc = usados.length ? usados : [...new Set(menciones.map(m => m.tipo))];
   let estado;
-  if (evaluacion.length) { const k = evaluacion.filter(e => e.estadoAnexo === "especifico").length; estado = k === evaluacion.length ? "Incluye instrumento" : k ? "Desarrollo parcial" : "Solo mencionado"; }
+  if (evaluacion.length) { const k = evaluacion.filter(e => e.estadoAnexo === "especifico").length; estado = k === evaluacion.length ? "Incluye instrumento" : (k || anexos.length) ? "Desarrollo parcial" : "Solo mencionado"; }
   else { const conAnexo = tiposMenc.filter(t => anexos.some(a => a.tipo === t)); estado = !tiposMenc.length ? (anexos.length ? "Incluye instrumento" : "No identificado") : conAnexo.length === tiposMenc.length ? "Incluye instrumento" : conAnexo.length ? "Desarrollo parcial" : "Solo mencionado"; }
   const txt = [];
+  const cuenta = {}; anexos.filter(a => !a.continuacion).forEach(a => { cuenta[a.tipo] = (cuenta[a.tipo] || 0) + 1; });
+  if (anexos.length) txt.push("Tipos de instrumento en el documento: " + Object.entries(cuenta).map(([t, k]) => `${t} (${k})`).join(", ") + ((an?.instrumentos?.pendientesOcr) ? `. ${an.instrumentos.pendientesOcr} imagen(es) pendiente(s) de leer.` : ""));
   if (evaluacion.length) txt.push(`Evaluación continua${parcial ? " del parcial " + parcial : ""}:\n` + evaluacion.map(e => `• ${e.producto || "Actividad"} — ${e.instrumento}${e.ponderacion ? " (" + e.ponderacion + ")" : ""}${e.aspectos ? ". Evalúa: " + e.aspectos : ""}. ${e.estadoAnexo === "especifico" ? "Desarrollado en anexo: " + e.anexo : "Sin desarrollo en el documento"}.`).join("\n"));
-  if (anexos.length) txt.push("Instrumentos desarrollados en el documento:\n" + anexos.map(a => `• ${a.titulo || a.tipo}${a.criterios?.length ? ` — ${a.criterios.length} criterios: ${a.criterios.slice(0, 6).join("; ")}${a.criterios.length > 6 ? "…" : ""}` : ""}`).join("\n"));
+  if (anexos.length) txt.push("Instrumentos desarrollados en el documento:\n" + anexos.map(a => `• ${a.tipo}${a.titulo && n(a.titulo) !== n(a.tipo) ? ": " + a.titulo : ""}${a.fuente === "imagen" ? " (imagen)" : ""}${a.criterios?.length ? ` — ${a.criterios.length} criterios: ${a.criterios.slice(0, 6).join("; ")}${a.criterios.length > 6 ? "…" : ""}` : ""}`).join("\n"));
   if (!evaluacion.length) { const faltan = tiposMenc.filter(t => !anexos.some(a => a.tipo === t)); if (faltan.length) txt.push("Sin desarrollo en el documento (solo se nombran): " + faltan.join(", ")); }
   if (!txt.length && G.instrumentos) txt.push("Indicado en la planeación:\n" + G.instrumentos);
   if (!txt.length) txt.push("No se identificaron instrumentos de evaluación en el documento.");
@@ -384,7 +527,7 @@ export function combinar(an, parcial) {
 }
 
 /* ---------- punto de entrada ---------- */
-export async function analizarPlaneacion(nombre, buf) {
+export async function analizarPlaneacion(nombre, buf, opts = {}) {
   const ext = String(nombre || "").toLowerCase().split(".").pop();
   let L;
   if (ext === "docx") L = await leerDocx(buf);
@@ -406,8 +549,16 @@ export async function analizarPlaneacion(nombre, buf) {
   }
   const lineasTodas = L.texto.split("\n").filter(Boolean);
   const ins = instrumentos(L.items, L.matrices, lineasTodas);
-  const anexos = [...(T?.anexos || [])];
-  ins.anexos.forEach(a => { if (!anexos.some(b => n(b.titulo) === n(a.titulo))) anexos.push(a); });
+  let anexos;
+  if (L.seccion) {                                          // hay título “Instrumentos de evaluación”: todo lo que sigue es instrumento
+    anexos = await instrumentosDeSeccion(L.seccion, { imagen: a => (a.path ? L.imagen(a.path) : L.imagen(a)), ocr: !!opts.ocr });
+    (T?.anexosTrasInstr || []).slice().reverse().forEach(a => { if (!anexos.some(b => n(b.titulo) === n(a.titulo))) anexos.unshift({ fuente: "texto", ...a }); });
+    anexos = anexos.filter(a => !(a.fuente === "texto" && anexos.some(b => b !== a && b.fuente !== "texto" && n(b.titulo) === n(a.titulo))));
+  } else {
+    const SECC = /^(evaluacion continua|diagnostico|datos generales|transversalidad|secuencia didactica|actividades de ensenanza|primer|segundo|tercer)/;
+    anexos = [...(T?.anexos || [])];
+    ins.anexos.forEach(a => { if (!SECC.test(n(a.titulo)) && !anexos.some(b => n(b.titulo) === n(a.titulo))) anexos.push(a); });
+  }
   // datos generales del documento (sirven para asociar la planeación)
   const SEM = { primero: 1, segundo: 2, tercero: 3, cuarto: 4, quinto: 5, sexto: 6 };
   const dd = { asignatura: generales.asignatura || "", docente: generales.docente || "", grupo: generales.grupo || "", semestre: generales.semestre || "" };
@@ -417,5 +568,6 @@ export async function analizarPlaneacion(nombre, buf) {
   ["asignatura", "docente", "grupo", "semestre", "semestreNum", "grupoNum"].forEach(k => delete generales[k]);
   return { formato: ext, soportado: true, version: 3, texto: L.texto.slice(0, 40000), generales, porParcial, datosDoc: dd,
     parciales: T?.parciales || Object.keys(porParcial).map(Number),
-    transversalidad: (T?.transversalidad) || transversalidad(L.items, L.matrices), instrumentos: { anexos, menciones: ins.menciones } };
+    transversalidad: (T?.transversalidad) || transversalidad(L.items, L.matrices),
+    instrumentos: { anexos, menciones: ins.menciones, seccion: !!L.seccion, pendientesOcr: anexos.filter(a => a.pendienteOcr).length } };
 }

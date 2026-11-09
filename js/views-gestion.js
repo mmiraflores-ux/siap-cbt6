@@ -5,6 +5,8 @@ import {
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
 import { camposPlan } from "./views-plan.js";
+import { apiladas, barras, segmentada } from "./graficas.js";
+import { ESTADOS_INSTR, planVigente } from "./tablero.js";
 
 /* ======================= PAEC ======================= */
 const puedePAEC = p => isStaff() || isVinc() || (p && p.responsableId === me());
@@ -179,11 +181,12 @@ function datosReporte(tipo, q) {
   if (tipo === "instrumentos") {
     const cols = ["Grupo", "Unidad curricular", "Docente", "Parcial", "¿Tiene instrumento?", "Instrumentos que usa", "Productos que evalúa", "Instrumentos desarrollados (criterios)"];
     const rows = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.asignacionId).filter(fGrupo).filter(fDoc).filter(fPar)
+      .filter(p => !q.estado || (camposPlan(p).estadoInstr || "Sin analizar") === q.estado).filter(p => !q.tipoI || (camposPlan(p).anexos || []).some(a => a.tipo === q.tipoI))
       .sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || a.parcial - b.parcial).map(p => {
         const c = camposPlan(p); const ev = c.evaluacion || [];
         return [p.grupo, alabel(p.asignacionId), pname(p.docenteId), p.parcial, c.estadoInstr || "Sin analizar", (c.tiposInstr || []).join(", "),
           ev.map(e => `${e.producto || "—"} (${e.instrumento}${e.ponderacion ? ", " + e.ponderacion : ""})`).join("; "),
-          (c.anexos || []).map(a => `${a.titulo || a.tipo}${a.criterios?.length ? ": " + a.criterios.length + " criterios" : ""}`).join(" | ")];
+          (c.anexos || []).map(a => `${a.tipo}${a.titulo && a.titulo !== a.tipo ? " — " + a.titulo : ""}${a.fuente === "imagen" ? " (imagen)" : ""}${a.criterios?.length ? ": " + a.criterios.length + " criterios" : ""}`).join(" | ")];
       });
     return { cols, rows, nota: "“Incluye instrumento”: los instrumentos que usa el parcial vienen desarrollados (criterios o niveles) en el documento. “Desarrollo parcial”: solo algunos. “Solo mencionado”: se nombran pero no se incluyen. Es información descriptiva, no una calificación." };
   }
@@ -198,6 +201,86 @@ function datosReporte(tipo, q) {
   }
   return { cols: [], rows: [] };
 }
+/* ---------- gráficas de cada reporte (cuentan registros; no comparan docentes) ---------- */
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+function porMes(arr, fecha) {
+  const c = {}; arr.forEach(x => { const f = fecha(x); if (f && /^\d{4}-\d{2}/.test(f)) { const k = f.slice(0, 7); c[k] = (c[k] || 0) + 1; } });
+  return Object.keys(c).sort().slice(-10).map(k => ({ label: `${MESES[+k.slice(5, 7) - 1]} ${k.slice(2, 4)}`, value: c[k] }));
+}
+const COLS4 = ["--s1", "--s2", "--s3", "--s4"];
+function graficasReporte(tipo, q) {
+  const qs = extra => "/reportes?" + new URLSearchParams(Object.fromEntries(Object.entries({ tipo, parcial: q.parcial || "", grupo: q.grupo || "", doc: q.doc || "", ...extra }).filter(([, v]) => v !== "" && v != null))).toString();
+  const fGrupo = x => !q.grupo || x.grupo === q.grupo || A(x.asignacionId)?.grupo === q.grupo;
+  const fDoc = x => !q.doc || x.docenteId === q.doc;
+  const fPar = x => !q.parcial || x.parcial == q.parcial;
+  const grupos = L("grupos").map(g => g.id).sort().filter(g => !q.grupo || g === q.grupo);
+  const g = [];
+  if (tipo === "planeaciones") {
+    const pars = q.parcial ? [+q.parcial] : [1, 2, 3];
+    const asg = L("asignaciones").filter(a => a.estado !== "Cerrada").filter(fGrupo).filter(fDoc);
+    const est = a => pars.map(n => planVigente(a.id, n)).map(p => !p ? "sin" : p.estadoAsociacion === "Identificado" ? "ok" : "rev");
+    const series = [{ key: "ok", label: "Identificada", color: "--s1" }, { key: "rev", label: "Por revisar asociación", color: "--s4" }, { key: "sin", label: "Sin registro", color: "--vacio" }];
+    g.push(`<div class="wide">${apiladas({ titulo: `Planeaciones por grupo · ${q.parcial ? "parcial " + q.parcial : "los tres parciales"}`, nota: "Clic en un grupo para filtrar", unidad: "", series,
+      filas: grupos.map(gr => { const segs = { ok: 0, rev: 0, sin: 0 }; asg.filter(a => a.grupo === gr).forEach(a => est(a).forEach(e => segs[e]++)); return { label: "Grupo " + gr, segs, href: qs({ grupo: gr }) }; }).filter(f => f.segs.ok + f.segs.rev + f.segs.sin) })}</div>`);
+    g.push(barras({ titulo: "Materias con planeación por parcial", color: "--s1", filas: [1, 2, 3].map(n => ({ label: "Parcial " + n, value: asg.filter(a => planVigente(a.id, n)).length, tip: `Parcial ${n}: ${asg.filter(a => planVigente(a.id, n)).length} de ${asg.length} materias`, href: qs({ parcial: n }) })) }));
+    const cur = ["Fundamental", "Laboral", "Ampliado"];
+    g.push(apiladas({ titulo: "Cobertura por currículum", series: series.filter(s => s.key !== "rev").map(s => s.key === "ok" ? { ...s, label: "Con planeación" } : s),
+      filas: cur.map(c => { const del = asg.filter(a => UC(a.unidadId)?.curriculum === c); let con = 0, sin = 0; del.forEach(a => est(a).forEach(e => e === "sin" ? sin++ : con++)); return { label: c, segs: { ok: con, sin } }; }).filter(f => f.segs.ok + f.segs.sin) }));
+  }
+  if (tipo === "instrumentos") {
+    const pls = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.asignacionId).filter(fGrupo).filter(fDoc).filter(fPar);
+    const c = Object.fromEntries(ESTADOS_INSTR.map(e => [e.key, 0])); pls.forEach(p => { const e = camposPlan(p).estadoInstr || "Sin analizar"; c[c[e] !== undefined ? e : "Sin analizar"]++; });
+    g.push(segmentada({ titulo: "¿Las planeaciones incluyen sus instrumentos?", nota: "clic para filtrar", unidad: " planeaciones",
+      segs: ESTADOS_INSTR.map(e => ({ label: e.label, value: c[e.key], color: e.color, href: qs({ estado: q.estado === e.key ? "" : e.key }) })) }));
+    const tipos = {}; pls.forEach(p => (camposPlan(p).anexos || []).forEach(a => { tipos[a.tipo] = (tipos[a.tipo] || 0) + 1; }));
+    const tt = Object.entries(tipos).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    g.push(barras({ titulo: "Tipos de instrumento desarrollados", nota: "rúbricas, listas de cotejo, etc. encontradas en los documentos", color: "--s3", vacio: "Aún no se identifican instrumentos desarrollados.",
+      filas: tt.map(([t, v]) => ({ label: t.replace("Escala estimativa o de valoración", "Escala estimativa"), value: v, tip: `${t}: ${v}`, href: qs({ tipoI: q.tipoI === t ? "" : t }) })) }));
+    g.push(`<div class="wide">${apiladas({ titulo: "Instrumentos por grupo", unidad: " planeaciones", series: ESTADOS_INSTR.map(e => ({ key: e.key, label: e.label, color: e.color })),
+      filas: grupos.map(gr => { const segs = {}; pls.filter(p => p.grupo === gr).forEach(p => { const e = camposPlan(p).estadoInstr || "Sin analizar"; segs[e] = (segs[e] || 0) + 1; }); return { label: "Grupo " + gr, segs, href: qs({ grupo: gr }) }; }).filter(f => Object.keys(f.segs).length) })}</div>`);
+  }
+  if (tipo === "transversalidad") {
+    const t = transversalidadPlaneada(q);
+    g.push(barras({ titulo: "Actividades transversales por grupo", color: "--s3", filas: grupos.map(gr => ({ label: gr, value: t.rows.filter(r => r[0] === gr).length, href: qs({ grupo: gr }), tip: `Grupo ${gr}: ${t.rows.filter(r => r[0] === gr).length} actividades` })), vacio: "Ninguna planeación incluye la tabla de transversalidad." }));
+    g.push(barras({ titulo: "UAC que declaran transversalidad", color: "--s1", filas: grupos.map(gr => ({ label: gr, value: new Set(t.rows.filter(r => r[0] === gr).map(r => r[1])).size, href: qs({ grupo: gr }) })), vacio: "Sin datos." }));
+  }
+  if (tipo === "acompanamiento" || tipo === "retro") {
+    const obs = L("observaciones").filter(fGrupo).filter(fDoc).filter(fPar).filter(o => o.estado !== "Cancelada");
+    if (tipo === "acompanamiento") {
+      const EST = ["Programada", "En captura", "Registrada", "En diálogo", "Pendiente Vo.Bo.", "Con Vo.Bo."];
+      g.push(barras({ titulo: "Observaciones por etapa", color: "--s1", filas: EST.map(e => ({ label: e, value: obs.filter(o => o.estado === e).length, href: qs({ estado: q.estado === e ? "" : e }) })), vacio: "Aún no hay observaciones." }));
+      g.push(barras({ titulo: "Observaciones por mes", color: "--s2", filas: porMes(obs, o => o.fecha), vacio: "Sin fechas registradas." }));
+    } else {
+      const ar = obs.filter(o => o.estado !== "Programada" && o.estado !== "En captura");
+      const env = ar.filter(o => byId("autorreflexiones", o.id)?.enviada).length, dl = ar.filter(o => byId("dialogos", o.id)).length, vb = ar.filter(o => o.estado === "Con Vo.Bo.").length;
+      g.push(segmentada({ titulo: "Autorreflexión docente", unidad: " observaciones", segs: [{ label: "Enviada", value: env, color: "--s1" }, { label: "Pendiente", value: ar.length - env, color: "--vacio" }] }));
+      g.push(segmentada({ titulo: "Diálogo de retroalimentación", unidad: " observaciones", segs: [{ label: "Con Vo.Bo.", value: vb, color: "--s3" }, { label: "Diálogo realizado", value: Math.max(0, dl - vb), color: "--s1" }, { label: "Pendiente", value: Math.max(0, ar.length - Math.max(dl, vb)), color: "--vacio" }] }));
+    }
+  }
+  if (tipo === "acuerdos") {
+    const ac = L("acuerdos").filter(fDoc).filter(fGrupo);
+    const EA = ["Pendiente", "En proceso", "Cumplido", "Cancelado"];
+    g.push(segmentada({ titulo: "Acuerdos por estado", nota: "clic para filtrar", segs: EA.map((e, i) => ({ label: e, value: ac.filter(a => a.estado === e).length, color: COLS4[i], href: qs({ estado: q.estado === e ? "" : e }) })), vacio: "Aún no hay acuerdos." }));
+    const venc = ac.filter(a => ["Pendiente", "En proceso"].includes(a.estado) && a.fechaCompromiso && a.fechaCompromiso < today()).length;
+    g.push(barras({ titulo: "Fechas compromiso por mes", nota: venc ? `${venc} abiertos con fecha vencida` : "", color: "--s2", filas: porMes(ac, a => a.fechaCompromiso), vacio: "Sin fechas compromiso." }));
+  }
+  if (tipo === "alertas") {
+    const c = {}; alertas().forEach(a => c[a.cat] = (c[a.cat] || 0) + 1);
+    g.push(`<div class="wide">${barras({ titulo: "Incidencias por categoría", color: "--s2", filas: Object.entries(c).map(([k, v]) => ({ label: k, value: v })), vacio: "Sin incidencias." })}</div>`);
+  }
+  if (tipo === "historico") {
+    const au = L("auditoria");
+    g.push(barras({ titulo: "Movimientos por mes", color: "--s1", filas: porMes(au, a => a.ts), vacio: "Sin movimientos." }));
+    const c = {}; au.forEach(a => c[a.accion] = (c[a.accion] || 0) + 1);
+    g.push(barras({ titulo: "Tipos de movimiento más frecuentes", color: "--s3", filas: Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([k, v]) => ({ label: short(k, 22), value: v, tip: `${k}: ${v}` })) }));
+  }
+  if (tipo === "paec") {
+    const ps = L("paec"); const est = [...new Set(ps.map(p => p.estado))];
+    g.push(segmentada({ titulo: "Proyectos por estado", segs: est.map((e, i) => ({ label: e || "—", value: ps.filter(p => p.estado === e).length, color: COLS4[i % 4] })), vacio: "Aún no hay proyectos PAEC." }));
+    g.push(barras({ titulo: "UAC articuladas por proyecto", color: "--s3", filas: ps.map(p => ({ label: short(p.nombre, 18), value: (p.asignaciones || []).length, tip: `${p.nombre}: ${(p.asignaciones || []).length} UAC`, href: "/paec?id=" + p.id })), vacio: "Sin proyectos." }));
+  }
+  return g.length ? `<div class="g-grid" style="margin-bottom:14px">${g.join("")}</div>` : "";
+}
 VIEWS.reportes = {
   title: "Reportes institucionales",
   render(r) {
@@ -209,12 +292,17 @@ VIEWS.reportes = {
       <div class="card-h"><h2>${esc(TIPOS.find(t => t[0] === tipo)[1])} · ${rows.length} registros</h2><button class="btn" data-act="xlsx" data-tipo="${tipo}">⬇ Excel</button><button class="btn" onclick="window.print()">⎙ PDF</button></div>
       ${["alertas", "historico", "paec"].includes(tipo) ? "" : `<div class="filters"><select data-filter="parcial"><option value="">Todos los parciales</option>${[1, 2, 3].map(n => opt(n, "Parcial " + n, q.parcial)).join("")}</select>
       <select data-filter="grupo"><option value="">Todos los grupos</option>${L("grupos").map(g => g.id).sort().map(g => opt(g, "Grupo " + g, q.grupo)).join("")}</select>
-      <select data-filter="doc"><option value="">Todas las personas</option>${docs.map(p => opt(p.id, p.nombre, q.doc)).join("")}</select></div>`}
+      <select data-filter="doc"><option value="">Todas las personas</option>${docs.map(p => opt(p.id, p.nombre, q.doc)).join("")}</select>
+      ${tipo === "instrumentos" ? `<select data-filter="estado" aria-label="Estado de instrumentos"><option value="">Todos los estados</option>${ESTADOS_INSTR.map(e => opt(e.key, e.label, q.estado)).join("")}</select>` : ""}
+      ${tipo === "acuerdos" ? `<select data-filter="estado" aria-label="Estado"><option value="">Todos los estados</option>${["Pendiente", "En proceso", "Cumplido", "Cancelado"].map(e => opt(e, e, q.estado)).join("")}</select>` : ""}
+      ${q.tipoI ? `<button class="btn sm" data-act="quitarTipoI">Tipo: ${esc(q.tipoI)} ✕</button>` : ""}</div>`}
+      ${graficasReporte(tipo, q)}
       ${nota ? `<p class="note info">${esc(nota)}</p>` : ""}
       <div class="tw"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows.map(rw => `<tr>${rw.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${cols.length}" class="empty">Sin datos (esto no significa incumplimiento: puede no haber registros aún).</td></tr>`}</tbody></table></div>
       <p class="faint" style="font-size:.75rem;margin-top:8px">Los reportes no generan rankings ni calificaciones del desempeño docente.</p></div>`;
   }
 };
+ACT.quitarTipoI = () => dropQ("tipoI");
 let xlsxP = null;
 ACT.xlsx = async el => {
   const tipo = el.dataset.tipo; const { cols, rows } = datosReporte(tipo, S.route.q);

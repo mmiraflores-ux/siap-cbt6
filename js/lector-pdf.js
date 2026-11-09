@@ -221,7 +221,7 @@ function anexos(its, hdrs) {
     }
     const t = T.txt.replace(/^\d+[.)]\s*/, "").trim();
     const m = t.match(/\bpara\s+(?:evaluar\s+|valorar\s+|calificar\s+|revisar\s+)?(.+)$/i);
-    return { tipo: tipoInst(t), titulo: t.slice(0, 160), evalua: m ? m[1].replace(/^(el|la|los|las)\s+/i, "").slice(0, 160) : "", criterios, filas: criterios.length };
+    return { tipo: tipoInst(t), titulo: t.slice(0, 160), evalua: m ? m[1].replace(/^(el|la|los|las)\s+/i, "").slice(0, 160) : "", criterios, filas: criterios.length, gy: T.gy };
   });
 }
 
@@ -261,8 +261,14 @@ export function leerPlantillaPdf(raw) {
   const SEM = { primero: 1, segundo: 2, tercero: 3, cuarto: 4, quinto: 5, sexto: 6 };
   if (generales.semestre) { const s = SEM[n(generales.semestre).split(" ")[0]] || +n(generales.semestre).replace(/\D/g, "") || null; if (s) generales.semestreNum = s; }
   if (generales.grupo) { const g = generales.grupo.replace(/\D/g, ""); generales.grupoNum = g.length === 3 ? g : (g && generales.semestreNum ? String(generales.semestreNum * 100 + +g) : ""); }
+  // título “Instrumentos de evaluación” (no el encabezado de la tabla de evaluación continua)
+  const instrHead = its.find(i => /^(anexos?:? )?instrumentos? de evaluacion( utilizados)?:?$/.test(n(i.s)) && !hdrs.some(h => h.k === "ponderacion" && h.p === i.p && Math.abs(h.gy0 - i.gy) < 25));
+  const textoTrasInstr = instrHead ? lineas(its.filter(i => i.gy > instrHead.gy + 1)).map(l => l.txt) : [];
   const Ht = its.find(i => /^transversalidad curricular$/.test(n(i.s)));
   const tv = Ht ? transversalidad(its, { ...Ht, gy1: Ht.gy }) : null;
-  return { generales, porParcial, transversalidad: tv && (tv.filas.length ? tv : null), anexos: anexos(its, hdrs), parciales: marcas.map(m => m.n), texto: lineas(its).map(l => l.txt).join("\n") };
+  const todos = anexos(its, hdrs);
+  return { generales, porParcial, transversalidad: tv && (tv.filas.length ? tv : null), anexos: todos,
+    instrHead: instrHead ? { p: instrHead.p, y: instrHead.y, gy: instrHead.gy } : null, textoTrasInstr,
+    anexosTrasInstr: instrHead ? todos.filter(a => a.gy > instrHead.gy) : [], parciales: marcas.map(m => m.n), texto: lineas(its).map(l => l.txt).join("\n") };
 }
 export const _interno = { preparar, encabezados, columna, rangoColumna, refinar, finDeSeccion };
