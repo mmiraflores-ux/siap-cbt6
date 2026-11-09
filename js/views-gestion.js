@@ -4,6 +4,7 @@ import {
   isOri, isVinc, isAdmin, me, today, nowISO, fdate, fdt, parcialHoy, short, newId, audit, byId, alertas, norm, roles
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
+import { camposPlan } from "./views-plan.js";
 
 /* ======================= PAEC ======================= */
 const puedePAEC = p => isStaff() || isVinc() || (p && p.responsableId === me());
@@ -176,14 +177,15 @@ function datosReporte(tipo, q) {
     return { cols, rows, nota: "Últimos 500 movimientos auditados del ciclo." };
   }
   if (tipo === "instrumentos") {
-    const cols = ["Grupo", "Unidad curricular", "Docente", "Parcial", "¿Tiene instrumento?", "Instrumentos", "¿Qué evalúa?", "Criterios identificados"];
+    const cols = ["Grupo", "Unidad curricular", "Docente", "Parcial", "¿Tiene instrumento?", "Instrumentos que usa", "Productos que evalúa", "Instrumentos desarrollados (criterios)"];
     const rows = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.asignacionId).filter(fGrupo).filter(fDoc).filter(fPar)
       .sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || a.parcial - b.parcial).map(p => {
-        const ie = p.instrumentosEval;
-        return [p.grupo, alabel(p.asignacionId), pname(p.docenteId), p.parcial, ie ? ie.estado : "Sin analizar", ie ? (ie.tipos || []).join(", ") : "",
-          ie ? (ie.anexos || []).map(a => a.evalua || a.titulo).filter(Boolean).join(" · ") : "", ie ? (ie.anexos || []).map(a => (a.criterios || []).join("; ")).filter(Boolean).join(" | ") : ""];
+        const c = camposPlan(p); const ev = c.evaluacion || [];
+        return [p.grupo, alabel(p.asignacionId), pname(p.docenteId), p.parcial, c.estadoInstr || "Sin analizar", (c.tiposInstr || []).join(", "),
+          ev.map(e => `${e.producto || "—"} (${e.instrumento}${e.ponderacion ? ", " + e.ponderacion : ""})`).join("; "),
+          (c.anexos || []).map(a => `${a.titulo || a.tipo}${a.criterios?.length ? ": " + a.criterios.length + " criterios" : ""}`).join(" | ")];
       });
-    return { cols, rows, nota: "“Solo mencionado” indica que el documento nombra un instrumento pero no incluye sus criterios o niveles. “Sin analizar” se resuelve con “Analizar de nuevo” en Planeaciones. Es información descriptiva, no una calificación." };
+    return { cols, rows, nota: "“Incluye instrumento”: los instrumentos que usa el parcial vienen desarrollados (criterios o niveles) en el documento. “Desarrollo parcial”: solo algunos. “Solo mencionado”: se nombran pero no se incluyen. Es información descriptiva, no una calificación." };
   }
   if (tipo === "transversalidad") {
     const t = transversalidadPlaneada(q);

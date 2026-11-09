@@ -4,23 +4,36 @@ import {
   isOri, canObserve, me, norm, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, BLOQUES, DIAS, byId
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
-import { analizarPlaneacion, resumenInstrumentos } from "./extractor.js";
+import { analizarPlaneacion, combinar } from "./extractor.js";
 
 const BL = () => window.BLOOM;
 
 /* ---------------- lectura de planeaciones ---------------- */
 /* Analiza el archivo y devuelve los datos que se guardan en la planeación */
-async function datosDeAnalisis(nombre, buf) {
-  let an;
-  try { an = await analizarPlaneacion(nombre, buf); }
+async function datosDeAnalisis(nombre, buf, preAnalisis) {
+  let an = preAnalisis;
+  try { an = an || await analizarPlaneacion(nombre, buf); }
   catch (e) { console.warn(e); return { analisis: { fecha: nowISO(), error: e.message || String(e) } }; }
   const bloom = an.texto ? BL().analizar(an.texto) : null;
   return {
-    texto: an.texto || "", extraido: an.campos || {}, transversalidad: an.transversalidad || null, instrumentosEval: an.instrumentos || null,
+    texto: an.texto || "", generales: an.generales || {}, porParcial: an.porParcial || {}, datosDoc: an.datosDoc || null, parcialesDoc: an.parciales || [],
+    transversalidad: an.transversalidad || null, instrumentosEval: an.instrumentos || null, extraido: {},
     bloom: bloom ? { conteo: bloom.conteo, verbos: bloom.verbos, predominante: bloom.predominante, maxNivel: bloom.maxNivel, total: bloom.total } : null,
-    analisis: { fecha: nowISO(), formato: an.formato, soportado: an.soportado, version: 2, error: "" }
+    analisis: { fecha: nowISO(), formato: an.formato, soportado: an.soportado, version: 3, error: "" }
   };
 }
+/* Campos que el sistema muestra para la planeación, según su parcial */
+export function camposPlan(p) {
+  if (!p) return {};
+  if (p.analisis?.version === 3) {
+    const c = combinar({ generales: p.generales, porParcial: p.porParcial, instrumentos: p.instrumentosEval }, +p.parcial);
+    return { ...c, bloomProgresion: c.progresion ? BL().analizar(c.progresion).maxNivel : null };
+  }
+  const ex = p.extraido || {};                                    // planeaciones leídas con versiones anteriores
+  return { ...ex, estadoInstr: p.instrumentosEval?.estado || "", evaluacion: [], anexos: p.instrumentosEval?.anexos || [], tiposInstr: p.instrumentosEval?.tipos || [], bloomProgresion: p.bloomProgresion || null };
+}
+/* Lo que se muestra: lo corregido a mano o, si no, lo tomado del documento */
+export const valorPlan = (p, k) => (p?.[k] || camposPlan(p)[k] || "");
 export async function guardarArchivo(file, meta) {
   const max = (CFG.maxArchivoMB || 5) * 1024 * 1024;
   if (file.size > max) throw new Error(`“${file.name}” pesa ${(file.size / 1048576).toFixed(1)} MB; el máximo es ${CFG.maxArchivoMB} MB. Guarda un enlace de Drive/Classroom en su lugar.`);
@@ -35,46 +48,70 @@ ACT.descargar = async el => {
 };
 
 /* -------- interpretar nomenclatura: N.P_ABREV_NOMBRE_GRUPO o ABREV_NOMBRE_GRUPO -------- */
+const compacta = t => norm(t).replace(/[.\s_-]/g, "");
+/* Interpreta el nombre del archivo. Acepta N.P_ABREV_NOMBRE_GRUPO, ABREV_NOMBRE_GRUPO
+   y variantes sin grupo o con la abreviatura y el nombre partidos por guiones bajos. */
 export function interpretarNombre(fname) {
   const base = fname.replace(/\.[^.]+$/, "").replace(/\s+/g, " ").trim();
-  const t = base.split(/_+/).map(x => x.trim()).filter(Boolean);
+  let t = base.split(/_+/).map(x => x.trim()).filter(Boolean);
   const r = { base, np: null, abrev: "", nombre: "", grupo: null, notas: [] };
-  if (t.length && /^\d{3}$/.test(t[t.length - 1])) r.grupo = t.pop(); else { const m = base.match(/(\d{3})(?!.*\d{3})/); if (m) { r.grupo = m[1]; r.notas.push("Grupo detectado dentro del nombre"); } }
+  const ig = t.map((x, i) => /^\d{3}$/.test(x) ? i : -1).filter(i => i >= 0).pop();
+  if (ig !== undefined) { r.grupo = t[ig]; t.splice(ig, 1); }
+  else { const m = base.match(/(?:^|\D)(\d{3})(?!.*\d{3})(?:\D|$)/); if (m) { r.grupo = m[1]; r.notas.push("Grupo detectado dentro del nombre"); t = t.map(x => x.replace(m[1], "").trim()).filter(Boolean); } }
   if (t.length && /^\d{1,2}$/.test(t[0])) r.np = +t.shift();
-  if (t.length >= 2) { r.nombre = t.pop(); r.abrev = t.join(" "); } else if (t.length === 1) r.abrev = t[0];
+  // abreviatura: el tramo inicial más largo que coincide con el catálogo
+  const claves = new Set(); L("unidades").forEach(u => { claves.add(compacta(u.abrev)); (u.aliasHorario || []).forEach(x => claves.add(compacta(x))); });
+  let k = 0;
+  for (let i = Math.min(4, t.length - (t.length > 1 ? 1 : 0)); i >= 1; i--) if (claves.has(compacta(t.slice(0, i).join(" ")))) { k = i; break; }
+  if (!k) k = t.length > 1 ? 1 : t.length;
+  r.abrev = t.slice(0, k).join(" "); r.nombre = t.slice(k).join(" ");
   return r;
 }
-export function resolverAsignacion(it, parcial) {
-  const out = { asignacionId: "", estado: "No resuelto", motivos: [] };
-  const g = L("grupos").find(x => x.id === it.grupo);
-  if (!g) { out.motivos.push(it.grupo ? `Grupo ${it.grupo} no existe en el catálogo` : "No se encontró el grupo en el nombre"); return out; }
-  const uds = L("unidades").filter(u => u.semestre === g.semestre);
-  const ab = norm(it.abrev).replace(/[.\s]/g, "");
-  const byAb = ab ? uds.filter(u => { const ua = norm(u.abrev).replace(/[.\s]/g, ""); return ua === ab || ua.endsWith(ab) || (ab.length >= 2 && ua.startsWith(ab)) || (u.aliasHorario || []).some(a => norm(a).replace(/[.\s]/g, "") === ab); }) : [];
+const tokensNombre = t => norm(t).split(/[^A-Z]+/).filter(w => w.length >= 3);
+function coincideDocente(pid, texto) {
+  const p = P(pid); if (!p || !texto) return 0;
+  const nom = new Set([...tokensNombre(p.nombre), ...(p.alias || []).flatMap(tokensNombre)]);
+  return tokensNombre(texto).filter(w => nom.has(w)).length;
+}
+export function resolverAsignacion(it, parcial, doc) {
+  const out = { asignacionId: "", estado: "No resuelto", motivos: [], candidatos: [] };
+  let grupo = it.grupo, grupoDoc = false;
+  if (!grupo && doc?.grupoNum && L("grupos").some(x => x.id === doc.grupoNum)) { grupo = doc.grupoNum; grupoDoc = true; out.motivos.push(`Grupo ${grupo} tomado del documento`); }
+  const g = grupo ? L("grupos").find(x => x.id === grupo) : null;
+  if (grupo && !g) { out.motivos.push(`Grupo ${grupo} no existe en el catálogo`); return out; }
+  const uds = L("unidades").filter(u => !g || u.semestre === g.semestre);
+  const ab = compacta(it.abrev);
+  const byAb = ab ? uds.filter(u => { const ua = compacta(u.abrev); return ua === ab || (u.aliasHorario || []).some(a => compacta(a) === ab) || (ab.length >= 3 && (ua.endsWith(ab) || ua.startsWith(ab))); }) : [];
   const byNp = it.np ? uds.filter(u => u.np === it.np) : [];
-  let u = null;
-  if (byNp.length && byAb.length) { u = byNp.find(x => byAb.includes(x)); if (!u) { out.motivos.push(`El N.P. ${it.np} (${byNp[0].abrev}) no coincide con la abreviatura “${it.abrev}”`); u = byAb.length === 1 ? byAb[0] : byNp[0]; out.conflicto = true; } }
-  else if (byAb.length === 1) u = byAb[0];
-  else if (byAb.length > 1) { u = byAb.find(x => L("asignaciones").some(a => a.grupo === g.id && a.unidadId === x.id)); out.motivos.push("Abreviatura ambigua"); out.conflicto = true; }
-  else if (byNp.length) { u = byNp[0]; if (it.abrev) out.motivos.push(`Abreviatura “${it.abrev}” no reconocida; se usó el N.P.`); }
-  if (!u) { out.motivos.push("No se identificó la unidad curricular"); return out; }
-  const a = L("asignaciones").find(x => x.grupo === g.id && x.unidadId === u.id && x.estado !== "Cerrada");
-  if (!a) { out.motivos.push(`No hay asignación de ${u.abrev} en ${g.id}`); return out; }
-  out.asignacionId = a.id;
-  const p = P(a.docenteId); const nm = norm(it.nombre);
-  const nameOk = nm && p && ((p.alias || []).includes(nm) || norm(p.nombre).split(" ").includes(nm) || norm(p.nombre).replace(/\s/g, "").includes(nm.replace(/\s/g, "")));
-  if (!nm) out.motivos.push("El nombre del archivo no incluye docente");
-  else if (!nameOk) out.motivos.push(`“${it.nombre}” no corresponde a ${p?.nombre || "la persona asignada"}`);
-  out.estado = nameOk && !out.conflicto ? "Identificado" : "Requiere revisión";
+  const docAsig = norm(doc?.asignatura || "").slice(0, 38);
+  const byDoc = docAsig.length > 12 ? uds.filter(u => norm(u.nombre).startsWith(docAsig) || docAsig.startsWith(norm(u.nombre).slice(0, 38))) : [];
+  let us = byNp.length && byAb.length ? byNp.filter(x => byAb.includes(x)) : byAb.length ? byAb : byNp.length ? byNp : byDoc;
+  if (byNp.length && byAb.length && !us.length) { out.motivos.push(`El N.P. ${it.np} (${byNp[0].abrev}) no coincide con la abreviatura “${it.abrev}”`); us = byAb; out.conflicto = true; }
+  if (!byAb.length && it.abrev && us.length) out.motivos.push(`Abreviatura “${it.abrev}” no reconocida; se usó ${byNp.length ? "el N.P." : "el nombre de la asignatura del documento"}`);
+  if (!us.length) { out.motivos.push("No se identificó la unidad curricular"); return out; }
+  let cands = L("asignaciones").filter(x => us.some(u => u.id === x.unidadId) && x.estado !== "Cerrada" && (!g || x.grupo === g.id));
+  if (!cands.length) { out.motivos.push(`No hay asignación de ${us[0].abrev}${g ? " en " + g.id : ""}`); return out; }
+  const pista = [it.nombre, doc?.docente].filter(Boolean).join(" ");
+  if (cands.length > 1 && pista) { const mejor = Math.max(...cands.map(c => coincideDocente(c.docenteId, pista))); if (mejor > 0) cands = cands.filter(c => coincideDocente(c.docenteId, pista) === mejor); }
+  out.candidatos = cands.map(c => c.id);
+  const a = cands[0]; out.asignacionId = a.id;
+  if (cands.length > 1) { out.motivos.push(`Varias asignaciones posibles (${cands.map(c => c.grupo).join(", ")}); confirma el grupo`); out.conflicto = true; }
+  if (!g) { out.motivos.push(`El nombre del archivo no indica el grupo; se propone ${a.grupo}`); out.conflicto = out.conflicto || cands.length > 1; out.sinGrupo = true; }
+  const p = P(a.docenteId);
+  const nameOk = !!pista && coincideDocente(a.docenteId, pista) > 0;
+  if (!pista) out.motivos.push("El nombre del archivo no incluye docente");
+  else if (!nameOk) out.motivos.push(`“${it.nombre || doc?.docente}” no corresponde a ${p?.nombre || "la persona asignada"}`);
+  out.estado = nameOk && !out.conflicto && (g || false) ? "Identificado" : "Requiere revisión";
+  if (out.sinGrupo && nameOk && cands.length === 1) out.estado = "Requiere revisión";
   const prev = L("planeaciones").filter(x => x.asignacionId === a.id && x.parcial == parcial && x.estado !== "Sustituida");
   if (prev.length) out.motivos.push(`Ya existe planeación (v${Math.max(...prev.map(x => x.version || 1))}); se guardará como nueva versión`);
   return out;
 }
 
-async function registrarPlaneacion({ asignacionId, parcial, file, enlace, estadoAsociacion, interpretacion, motivos }) {
+async function registrarPlaneacion({ asignacionId, parcial, file, enlace, estadoAsociacion, interpretacion, motivos, an }) {
   const a = A(asignacionId);
   let archivoId = "", nombre = file?.name || "", datos = {};
-  if (file) { const r = await guardarArchivo(file, { docenteId: a?.docenteId || "" }); archivoId = r.id; datos = await datosDeAnalisis(file.name, r.buf); }
+  if (file) { const r = await guardarArchivo(file, { docenteId: a?.docenteId || "" }); archivoId = r.id; datos = await datosDeAnalisis(file.name, r.buf, an); }
   const prev = a ? L("planeaciones").filter(x => x.asignacionId === a.id && x.parcial == parcial && x.estado !== "Sustituida") : [];
   const version = prev.length ? Math.max(...prev.map(x => x.version || 1)) + 1 : 1;
   for (const p of prev) await save("planeaciones", p.id, { estado: "Sustituida", sustituidaPor: version }, "nueva versión");
@@ -126,7 +163,7 @@ VIEWS.planeaciones = {
   }
 };
 window.SIAP_setQ = (k, v) => setQ(k, v);
-export const chipInstr = p => { const e = p.instrumentosEval?.estado; if (!e) return `<span class="faint">—</span>`; return chip(e, e === "Incluye instrumento" ? "g" : e === "Solo mencionado" ? "a" : ""); };
+export const chipInstr = p => { const e = camposPlan(p).estadoInstr; if (!e) return `<span class="faint">—</span>`; return chip(e, e === "Incluye instrumento" ? "g" : e === "Desarrollo parcial" ? "b" : e === "Solo mencionado" ? "a" : ""); };
 
 /* -------- volver a analizar archivos ya cargados -------- */
 async function reanalizar(p) {
@@ -140,6 +177,17 @@ ACT.reanalizarUna = async el => {
   const p = byId("planeaciones", el.dataset.id); el.disabled = true; el.textContent = "Analizando…";
   try { const d = await reanalizar(p); toast(d.analisis?.error ? "No se pudo leer: " + d.analisis.error : "Planeación analizada de nuevo.", !!d.analisis?.error); setTimeout(() => ACT.verPlan({ dataset: { id: p.id } }), 300); }
   catch (e) { toast(e.message, true); el.disabled = false; el.textContent = "↻ Analizar de nuevo"; }
+};
+ACT.usarParaParciales = async el => {
+  const p = byId("planeaciones", el.dataset.id);
+  const faltan = (p.parcialesDoc || []).filter(n2 => n2 != p.parcial && !L("planeaciones").some(x => x.asignacionId === p.asignacionId && x.parcial == n2 && x.estado !== "Sustituida"));
+  if (!faltan.length) return;
+  const copia = ["archivoId", "archivoNombre", "enlace", "asignacionId", "docenteId", "grupo", "unidadId", "ciclo", "periodo", "estadoAsociacion", "texto", "generales", "porParcial", "datosDoc", "parcialesDoc", "transversalidad", "instrumentosEval", "bloom", "analisis", "interpretacion"];
+  for (const n2 of faltan) {
+    const d = Object.fromEntries(copia.filter(k => p[k] !== undefined).map(k => [k, p[k]]));
+    await save("planeaciones", newId("pl-"), { ...d, parcial: n2, version: 1, estado: "Cargada", extraido: {}, motivos: [`Mismo documento semestral registrado para el parcial ${p.parcial}`], cargadoPor: me() || "", fechaCarga: nowISO(), validadoPor: p.validadoPor || "" }, "planeación semestral para otro parcial");
+  }
+  toast(`Registrada también para el parcial ${faltan.join(" y ")}.`); closeModal();
 };
 ACT.reanalizarTodas = async el => {
   const arr = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.archivoId);
@@ -175,7 +223,7 @@ ACT.cargaMasiva = () => {
   modal({ title: "Carga masiva de planeaciones", wide: true, submit: "Confirmar y guardar", body: `
     <div class="grid g2"><div class="f"><label>Parcial de esta carga</label><select name="parcial" id="cp">${[1, 2, 3].map(n => opt(n, "Parcial " + n, parcialHoy())).join("")}</select><span class="hint">Se aplica a todos los archivos; puedes cambiarlo por fila.</span></div>
     <div class="f"><label>Archivos (puedes seleccionar ~72 a la vez)</label><input type="file" id="cf" multiple accept=".doc,.docx,.xls,.xlsx,.pdf"></div></div>
-    <p class="hint">Formato esperado: <code>N.P_ABREVIATURA_NOMBRE_GRUPO</code> — ej. <code>9_SUB III DSCE_SANDIVEL_501.docx</code> o <code>7_CS_SAMANTHA_102.docx</code>.</p>
+    <p class="hint">El sistema lee cada archivo para identificar asignatura, docente y grupo, además del nombre del archivo (<code>N.P_ABREVIATURA_NOMBRE_GRUPO</code>, p. ej. <code>12_TSIYDH III_Lourdes Mociño_301.pdf</code>). Si el nombre no trae el grupo, se toma el que dice el documento.</p>
     <div id="cres"></div>
     <label class="checks"><label><input type="checkbox" name="noRes" checked> Guardar también los “No resuelto” en la bandeja de revisión</label></label>`,
     onSubmit: async o => {
@@ -188,7 +236,7 @@ ACT.cargaMasiva = () => {
         else if (sel && conf) est = "Identificado";
         if (!sel) est = "No resuelto";
         if (est === "No resuelto" && !o.noRes) continue;
-        try { await registrarPlaneacion({ asignacionId: sel, parcial: parc, file: r.file, estadoAsociacion: est, interpretacion: r.it, motivos: r.res.motivos }); ok++; }
+        try { await registrarPlaneacion({ asignacionId: sel, parcial: parc, file: r.file, estadoAsociacion: est, interpretacion: r.it, motivos: r.res.motivos, an: r.an }); ok++; }
         catch (e) { err++; toast(e.message, true); }
         const st = $("#cstat"); if (st) st.textContent = `Guardando ${i + 1} de ${rows.length}…`;
       }
@@ -198,19 +246,30 @@ ACT.cargaMasiva = () => {
   });
   const pintar = () => {
     const parcial = $("#cp").value, rows = S.ui.carga;
-    rows.forEach(r => r.res = resolverAsignacion(r.it, parcial));
+    rows.forEach(r => r.res = resolverAsignacion(r.it, parcial, r.an?.datosDoc));
     const cnt = e => rows.filter(r => r.res.estado === e).length;
     $("#cres").innerHTML = rows.length ? `<div class="row" style="margin:8px 0">${chip(cnt("Identificado") + " identificados", "g")}${chip(cnt("Requiere revisión") + " requieren revisión", "a")}${chip(cnt("No resuelto") + " no resueltos", "r")}<span class="sp"></span><small id="cstat" class="muted"></small></div>
     <div class="tw" style="max-height:46vh"><table><thead><tr><th>Archivo</th><th>Interpretación</th><th>Asignación</th><th>Parcial</th><th>Estado</th><th>Confirmo</th></tr></thead><tbody>
     ${rows.map((r, i) => `<tr><td><b>${esc(short(r.file.name, 40))}</b><span class="sub">${(r.file.size / 1024).toFixed(0)} KB</span></td>
-      <td><small>N.P. ${r.it.np ?? "—"} · ${esc(r.it.abrev || "—")} · ${esc(r.it.nombre || "—")} · ${esc(r.it.grupo || "—")}</small></td>
-      <td><select id="ca${i}" style="min-width:200px"><option value="">— Sin asociar —</option>${L("asignaciones").filter(a => !r.it.grupo || a.grupo === r.it.grupo || a.id === r.res.asignacionId).sort((a, b) => a.grupo.localeCompare(b.grupo)).map(a => opt(a.id, `${alabel(a)} · ${pname(a.docenteId).split(" ")[0]}`, r.res.asignacionId)).join("")}</select>
+      <td><small>Archivo: N.P. ${r.it.np ?? "—"} · ${esc(r.it.abrev || "—")} · ${esc(r.it.nombre || "—")} · ${esc(r.it.grupo || "sin grupo")}</small>${r.an?.datosDoc ? `<span class="sub">Documento: ${esc([short(r.an.datosDoc.asignatura, 40), r.an.datosDoc.docente, r.an.datosDoc.grupo ? "grupo " + r.an.datosDoc.grupo : ""].filter(Boolean).join(" · ") || "sin datos generales")}${(r.an.parciales || []).length > 1 ? " · semestral (P" + r.an.parciales.join(", P") + ")" : ""}</span>` : r.anErr ? `<span class="sub" style="color:var(--rojo)">${esc(r.anErr)}</span>` : ""}</td>
+      <td><select id="ca${i}" style="min-width:200px"><option value="">— Sin asociar —</option>${L("asignaciones").filter(a => (r.res.candidatos || []).includes(a.id) || !(r.it.grupo || r.an?.datosDoc?.grupoNum) || a.grupo === (r.it.grupo || r.an?.datosDoc?.grupoNum) || a.id === r.res.asignacionId).sort((a, b) => a.grupo.localeCompare(b.grupo)).map(a => opt(a.id, `${alabel(a)} · ${pname(a.docenteId).split(" ")[0]}`, r.res.asignacionId)).join("")}</select>
       ${r.res.motivos.length ? `<span class="sub" style="color:var(--ambar)">${esc(r.res.motivos.join(" · "))}</span>` : ""}</td>
       <td><select id="cpr${i}" style="width:auto">${[1, 2, 3].map(n => opt(n, "P" + n, parcial)).join("")}</select></td>
       <td>${chipEstado(r.res.estado)}</td><td><input type="checkbox" id="cc${i}" ${r.res.estado === "Identificado" ? "checked" : ""} title="Confirmo la asociación"></td></tr>`).join("")}</tbody></table></div>
     <p class="hint">Las filas “Requiere revisión” solo se guardan como válidas si marcas “Confirmo”. Queda registro de quién cargó y confirmó.</p>` : "";
   };
-  $("#cf").addEventListener("change", e => { S.ui.carga = [...e.target.files].map(file => ({ file, it: interpretarNombre(file.name) })); pintar(); });
+  $("#cf").addEventListener("change", async e => {
+    const lote = Date.now(); S.ui.lote = lote;
+    S.ui.carga = [...e.target.files].map(file => ({ file, it: interpretarNombre(file.name) }));
+    const btn = $("#ov button[type=submit]"); if (btn) btn.disabled = true;
+    for (const [i, r] of S.ui.carga.entries()) {                    // leer cada archivo antes de proponer la asociación
+      if (S.ui.lote !== lote) return;
+      $("#cres").innerHTML = `<p class="note info">Leyendo archivos ${i + 1} de ${S.ui.carga.length}: ${esc(r.file.name)}…</p>`;
+      try { r.an = await analizarPlaneacion(r.file.name, await r.file.arrayBuffer()); } catch (er) { r.anErr = "No se pudo leer: " + er.message; }
+    }
+    if (btn) btn.disabled = false;
+    pintar();
+  });
   $("#cp").addEventListener("change", pintar);
 };
 
@@ -220,9 +279,15 @@ ACT.verPlan = el => {
   const a = A(p.asignacionId), BN = BL().NIVELES, b = p.bloom;
   const own = p.docenteId === me(), edit = isStaff() || own;
   const vers = L("planeaciones").filter(x => x.asignacionId && x.asignacionId === p.asignacionId && x.parcial == p.parcial).sort((x, y) => (y.version || 1) - (x.version || 1));
-  const ex = p.extraido || {};
+  const ex = camposPlan(p), dd = p.datosDoc;
   const campo = (k, t, alto) => `<div class="f"><label>${t} ${p[k] ? chip("corregido a mano", "b") : ex[k] ? chip("tomado del documento · verificar", "d") : ""}</label><textarea name="${k}" ${edit ? "" : "readonly"} ${alto ? 'style="min-height:130px"' : ""} placeholder="Sin dato identificado en el documento">${esc(p[k] || ex[k] || "")}</textarea></div>`;
   const ie = p.instrumentosEval, tv = p.transversalidad, an = p.analisis || {};
+  const avisos = [];                                              // lo que dice el documento frente a la asignación
+  if (dd && a) {
+    if (dd.grupoNum && dd.grupoNum !== a.grupo) avisos.push(`El documento dice grupo ${dd.grupo}${dd.grupoNum !== dd.grupo ? " (" + dd.grupoNum + ")" : ""}; la asignación es del grupo ${a.grupo}.`);
+    const pd = P(a.docenteId); if (dd.docente && pd && !norm(dd.docente).split(" ").filter(w => w.length > 3).some(w => norm(pd.nombre).includes(w))) avisos.push(`El documento indica docente “${dd.docente}”.`);
+  }
+  const otrosParciales = (p.parcialesDoc || []).filter(n2 => n2 != p.parcial && !L("planeaciones").some(x => x.asignacionId === p.asignacionId && x.parcial == n2 && x.estado !== "Sustituida"));
   const tot = b?.total || 0;
   modal({ title: `Planeación · ${a ? alabel(a) : "sin asociar"} · P${p.parcial} · v${p.version || 1}`, wide: true, submit: "Guardar cambios", body: `
     <div class="grid g2"><div>
@@ -240,11 +305,15 @@ ACT.verPlan = el => {
         <p class="faint" style="font-size:.74rem">Análisis automático y descriptivo para orientar el diálogo; no califica la planeación.</p>`
         : `<p class="muted">${p.texto ? "No se detectaron verbos." : "Sin texto analizado. Usa “Analizar de nuevo” o captura la progresión abajo."}</p>`}
     </div></div><hr>
-    ${an.error ? `<p class="note err">No se pudo leer el archivo: ${esc(an.error)}</p>` : p.archivoId && an.version !== 2 ? `<p class="note info">Esta planeación se leyó con el lector anterior. Pulsa <b>“Analizar de nuevo”</b> para identificar progresión, propósito, contenidos, estrategias, transversalidad e instrumentos.</p>` : an.soportado === false ? `<p class="note">El formato .${esc(an.formato)} no se puede leer automáticamente (se aceptan .docx, .xlsx y .pdf). Captura los campos a mano.</p>` : ""}
+    ${dd && (dd.asignatura || dd.docente || dd.grupo) ? `<p style="font-size:.84rem"><b>Datos del documento:</b> ${[dd.asignatura, dd.docente, dd.grupo ? "Grupo " + dd.grupo : "", dd.semestre ? "Semestre " + dd.semestre : ""].filter(Boolean).map(esc).join(" · ")}</p>` : ""}
+    ${avisos.length ? `<p class="note">${avisos.map(esc).join(" ")} Verifica la asociación.</p>` : ""}
+    ${(p.parcialesDoc || []).length > 1 ? `<p class="note info">Este documento es semestral: contiene los parciales ${p.parcialesDoc.join(", ")}. Abajo se muestra lo del <b>parcial ${p.parcial}</b>.${otrosParciales.length && edit && p.asignacionId ? ` <button type="button" class="btn sm" data-act="usarParaParciales" data-id="${p.id}">Registrar también para el parcial ${otrosParciales.join(" y ")}</button>` : ""}</p>` : ""}
+    ${an.error ? `<p class="note err">No se pudo leer el archivo: ${esc(an.error)}</p>` : p.archivoId && an.version !== 3 ? `<p class="note info">Esta planeación se leyó con el lector anterior. Pulsa <b>“Analizar de nuevo”</b> para identificar progresión, propósito, contenidos, estrategias, transversalidad e instrumentos.</p>` : an.soportado === false ? `<p class="note">El formato .${esc(an.formato)} no se puede leer automáticamente (se aceptan .docx, .xlsx y .pdf). Captura los campos a mano.</p>` : ""}
     ${p.archivoId && edit ? `<div class="row" style="margin-bottom:8px"><button type="button" class="btn sm" data-act="reanalizarUna" data-id="${p.id}">↻ Analizar de nuevo</button>${an.fecha ? `<small class="faint">Último análisis: ${fdt(an.fecha)}</small>` : ""}</div>` : ""}
     <div class="grid g2">${campo("progresion", "Progresión / aprendizaje de trayectoria / propósito formativo")}${campo("proposito", "Propósito / meta de aprendizaje")}${campo("contenidos", "Temas / contenidos")}${campo("estrategias", "Metodologías activas / estrategias didácticas")}</div>
     <div class="card flat" style="margin:4px 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Instrumentos de evaluación</h3>${chipInstr(p)}</div>
-      ${ie && ie.anexos?.length ? `<div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Instrumento</th><th>¿Qué evalúa?</th><th>Criterios identificados</th></tr></thead><tbody>${ie.anexos.map(x => `<tr><td><b>${esc(x.tipo)}</b><span class="sub">${esc(x.titulo || "")}</span></td><td>${esc(x.evalua || x.titulo || "—")}</td><td>${(x.criterios || []).map(esc).join("<br>") || "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${ex.evaluacion?.length ? `<p class="muted" style="font-size:.82rem;margin:0 0 4px">Evaluación continua del parcial ${p.parcial}</p><div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Producto / actividad</th><th>Aspectos que se evalúan</th><th>Instrumento</th><th class="num">Ponderación</th><th>¿Desarrollado?</th></tr></thead><tbody>${ex.evaluacion.map(e => `<tr><td>${esc(e.producto || "—")}</td><td>${esc(e.aspectos || "—")}</td><td>${esc(e.instrumento)}</td><td class="num">${esc(e.ponderacion || "")}</td><td>${e.estadoAnexo === "especifico" ? chip("Sí, en anexo", "g") + `<span class="sub">${esc(short(e.anexo, 60))}</span>` : e.estadoAnexo === "otro" ? chip("Solo se nombra", "a") + `<span class="sub">Hay ${esc(e.tipo.toLowerCase())} en anexo, pero para otro producto</span>` : chip("Solo se nombra", "a")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${(ex.anexos || []).length ? `<p class="muted" style="font-size:.82rem;margin:0 0 4px">Instrumentos desarrollados en el documento</p><div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Instrumento</th><th>¿Qué evalúa?</th><th>Criterios identificados</th></tr></thead><tbody>${ex.anexos.map(x => `<tr><td><b>${esc(x.tipo)}</b><span class="sub">${esc(x.titulo || "")}</span></td><td>${esc(x.evalua || "—")}</td><td>${(x.criterios || []).map(esc).join("<br>") || "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
       ${ie && ie.menciones?.length ? `<details><summary class="muted" style="cursor:pointer;font-size:.85rem">Dónde se mencionan (${ie.menciones.length})</summary>${ie.menciones.map(m => `<p style="font-size:.82rem;margin:4px 0">${chip(m.tipo)} ${esc(m.contexto)}${m.alFinal ? " " + chip("al final del documento", "d") : ""}</p>`).join("")}</details>` : ""}
       ${campo("instrumentos", "Resumen (editable)", true)}</div>
     <div class="card flat" style="margin:0 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Transversalidad curricular</h3>${tv ? chip("Se enviará a PAEC", "b") : chip("No identificada")}</div>
@@ -256,7 +325,7 @@ ACT.verPlan = el => {
     onSubmit: edit ? async o => {
       // Solo se guarda como “corregido a mano” lo que difiere de lo tomado del documento
       const d = {}; ["progresion", "proposito", "contenidos", "estrategias", "instrumentos"].forEach(k => { d[k] = (o[k] || "") === (ex[k] || "") ? "" : (o[k] || ""); });
-      if (o.progresion && !p.bloomProgresion) { const an = BL().analizar(o.progresion); d.bloomProgresion = an.maxNivel || null; }
+      if (d.progresion) { const an2 = BL().analizar(d.progresion); d.bloomProgresion = an2.maxNivel || null; }
       if (isStaff()) {
         const a2 = A(o.asignacionId);
         Object.assign(d, { asignacionId: o.asignacionId, docenteId: a2?.docenteId || "", grupo: a2?.grupo || p.grupo, unidadId: a2?.unidadId || "", estadoAsociacion: o.asignacionId ? o.estadoAsociacion : "No resuelto", parcial: +o.parcial });
@@ -328,7 +397,7 @@ ACT.concrecion = el => {
   const rel = ["Coincidencia con lo planeado", "Ajuste pedagógico", "Condición contextual", "Pendiente de documentar"];
   const ev = L("evidencias").filter(e => e.refCol === "concreciones" && e.refId === s.id);
   modal({ title: `Concreción áulica · ${alabel(s.asignacionId)} · ${fdate(s.fecha)}`, wide: true, body: `
-    <div class="grid g2"><div class="card flat"><h3>Lo planeado</h3>${pl ? `<p style="font-size:.85rem"><b>Progresión:</b> ${esc(pl.progresion || pl.extraido?.progresion || "—")}<br><b>Propósito:</b> ${esc(pl.proposito || pl.extraido?.proposito || "—")}<br><b>Estrategias:</b> ${esc(short(pl.estrategias || pl.extraido?.estrategias || "—", 300))}</p><small class="faint">Planeación v${pl.version || 1}. Solo se muestra lo identificado en el documento.</small>` : `<p class="muted">Sesión sin planeación vinculada.</p>`}</div>
+    <div class="grid g2"><div class="card flat"><h3>Lo planeado</h3>${pl ? `<p style="font-size:.85rem"><b>Progresión:</b> ${esc(valorPlan(pl, "progresion") || "—")}<br><b>Propósito:</b> ${esc(short(valorPlan(pl, "proposito") || "—", 400))}<br><b>Estrategias:</b> ${esc(short(valorPlan(pl, "estrategias") || "—", 300))}</p><small class="faint">Planeación v${pl.version || 1}. Solo se muestra lo identificado en el documento.</small>` : `<p class="muted">Sesión sin planeación vinculada.</p>`}</div>
     <div><div class="f"><label>Lo que ocurrió en la sesión</label><textarea name="realizado" ${edit ? "" : "readonly"}>${esc(c.realizado || "")}</textarea></div></div></div>
     <div class="grid g2"><div class="f"><label>Ajustes pedagógicos realizados</label><textarea name="ajustes">${esc(c.ajustes || "")}</textarea></div>
     <div class="f"><label>Condiciones contextuales</label><textarea name="contexto" placeholder="Ej. suspensión parcial, falla de equipo, actividad institucional…">${esc(c.contexto || "")}</textarea></div></div>

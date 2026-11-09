@@ -4,6 +4,8 @@
    sin importar si el dato está a la derecha, debajo o en párrafo.
    Solo devuelve lo que realmente aparece en el archivo.
    ============================================================= */
+import { leerPlantillaPdf } from "./lector-pdf.js";
+
 const LIBS = {
   jszip: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
   xlsx: "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
@@ -29,7 +31,7 @@ export const CAMPOS = [
   { k: "progresion", t: "Progresión / aprendizaje de trayectoria / propósito formativo",
     re: /^(progresion(es)?\b|aprendizajes? de (la )?trayectoria|proposito formativo|propositos formativos)/ },
   { k: "proposito", t: "Propósito / meta de aprendizaje",
-    re: /^(metas? (de )?aprendizaje|propositos?( (de|del) (la |el )?(sesion|aprendizaje|secuencia|parcial|clase|bloque|submodulo|modulo|curso))?$|objetivos?( (de|del) (la |el )?(aprendizaje|sesion|clase|secuencia|parcial))?$|aprendizajes? esperados?)/ },
+    re: /^(metas? (de )?aprendizaje|metas? educativas?|propositos?( (de|del) (la |el )?(sesion|aprendizaje|secuencia|parcial|clase|bloque|submodulo|modulo|curso))?$|objetivos?( (de|del) (la |el )?(aprendizaje|sesion|clase|secuencia|parcial))?$|aprendizajes? esperados?)/ },
   { k: "contenidos", t: "Temas / contenidos",
     re: /^(temas?\s*(\/|y|o|-|,)?\s*contenidos?|contenidos?\s*(\/|y|o|-|,)?\s*temas?|contenidos?( (formativos?|especificos?|centrales?|tematicos?|conceptuales?|a desarrollar))?$|temas?( (centrales?|generales?|a desarrollar|y subtemas))?$|temario)/ },
   { k: "estrategias", t: "Metodologías activas / estrategias didácticas",
@@ -38,6 +40,9 @@ export const CAMPOS = [
     re: /^(instrumentos?( (de|para la) evaluacion)?$|tecnicas? e instrumentos|evaluacion( (formativa|sumativa|diagnostica))?$|instrumentos? de evaluacion)/ }
 ];
 const TRANSV = /^transversalidad/;
+const DATOS = [["asignatura", /^(asignatura ?\/? ?submodulo|asignatura|submodulo|uac|unidad de aprendizaje curricular)$/], ["docente", /^(nombre del o la docente|nombre del docente|docente)$/], ["grupo", /^grupo$/], ["semestre", /^semestre$/]];
+const PARCIAL_RE = /^(primer|segundo|tercer)o? parcial$/;
+const NUMP = { primer: 1, primero: 1, segundo: 2, tercer: 3, tercero: 3 };
 const OTROS = /^(actividades?|apertura|inicio|desarrollo|cierre|recursos?|materiales?|productos?( esperados?)?|evidencias?|bibliografia|referencias|fecha|docente|nombre|grupo|semestre|sesion(es)?|duracion|tiempo|competencias?|habilidades|campo|uac|asignatura|submodulo|modulo|parcial|plantel|ciclo|categorias?|subcategorias?|ambitos?|recursos sociocognitivos|areas? de conocimiento|observaciones|firma|vo\.? ?bo|elaboro|reviso|ponderacion|criterios?( de evaluacion)?|valor|puntaje|horas|no\.?|num)\b/;
 
 function etiqueta(txt) {
@@ -46,12 +51,14 @@ function etiqueta(txt) {
   if (i > 0 && i < 70) {
     const antes = limpiaPref(n(raw.slice(0, i)));
     for (const c of CAMPOS) if (c.re.test(antes)) return { k: c.k, resto: raw.slice(i + 1).trim() };
+    for (const [k, re] of DATOS) if (re.test(antes)) return { k, resto: raw.slice(i + 1).trim() };
     if (TRANSV.test(antes)) return { k: "transversalidad", resto: raw.slice(i + 1).trim() };
   }
   const t = limpiaPref(n(raw)).replace(/[:.]+$/, "").trim();
   if (t.length > 75) return null;           // un valor largo nunca se confunde con un encabezado
   for (const c of CAMPOS) if (c.re.test(t)) return { k: c.k, resto: "" };
   if (TRANSV.test(t)) return { k: "transversalidad", resto: "" };
+  for (const [k, re] of DATOS) if (re.test(t)) return { k, resto: "" };
   if (t.length < 40 && OTROS.test(t)) return { k: "_otro", resto: "" };
   return null;
 }
@@ -269,17 +276,21 @@ async function leerDocx(buf) {
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   const body = [...doc.getElementsByTagName("*")].find(e => e.localName === "body");
   if (!body) throw new Error("No se pudo leer el contenido del documento.");
-  const items = [], lineas = []; let previo = "";
+  const items = [], lineas = [], segmentos = []; let previo = "", parcial = 0;
+  const esParcial = t => { const m = n(t).match(PARCIAL_RE); return m ? NUMP[m[1]] : 0; };
   hijos(body).forEach(el => {
     if (el.localName === "tbl") {
-      const M = matrizDocx(el); items.push({ tabla: true, M, previo }); previo = "";
+      const M = matrizDocx(el); items.push({ tabla: true, M, previo, parcial }); previo = "";
+      let ini = 0;                                          // partir la tabla donde empieza otro parcial
+      M.forEach((row, r) => { const np = distintas(row).map(x => esParcial(x.txt.split("\n")[0])).find(Boolean); if (np) { if (r > ini) segmentos.push({ M: M.slice(ini, r), parcial }); parcial = np; ini = r; } });
+      segmentos.push({ M: M.slice(ini), parcial });
       M.forEach(row => { const l = distintas(row).map(x => x.txt.replace(/\n/g, " ")).filter(Boolean).join(" | "); if (l) lineas.push(l); });
     } else if (el.localName === "p") {
-      textoP(el).split("\n").filter(Boolean).forEach(l => { items.push({ txt: l }); lineas.push(l); previo = (previo + "\n" + l).slice(-300); });
+      textoP(el).split("\n").filter(Boolean).forEach(l => { const np = esParcial(l); if (np) parcial = np; items.push({ txt: l, parcial }); lineas.push(l); previo = (previo + "\n" + l).slice(-300); });
     }
   });
   const matrices = [...doc.getElementsByTagName("*")].filter(e => e.localName === "tbl").map(matrizDocx);
-  return { items, matrices, texto: lineas.join("\n") };
+  return { items, matrices, segmentos, texto: lineas.join("\n") };
 }
 async function leerXlsx(buf) {
   const X = await lib(LIBS.xlsx, "XLSX");
@@ -299,14 +310,77 @@ async function leerPdf(buf) {
   const pdfjs = await lib(LIBS.pdf, "pdfjsLib");
   pdfjs.GlobalWorkerOptions.workerSrc = LIBS.pdfWorker;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
-  const lineas = [];
-  for (let p = 1; p <= Math.min(pdf.numPages, 40); p++) {
-    const tc = await (await pdf.getPage(p)).getTextContent();
-    const filas = new Map();
-    tc.items.forEach(it => { if (!it.str.trim()) return; const y = Math.round(it.transform[5] / 3); (filas.get(y) || filas.set(y, []).get(y)).push(it); });
-    [...filas.keys()].sort((a, b) => b - a).forEach(y => lineas.push(filas.get(y).sort((a, b) => a.transform[4] - b.transform[4]).map(i => i.str).join(" ").replace(/\s+/g, " ").trim()));
+  const raw = [];
+  for (let p = 1; p <= Math.min(pdf.numPages, 60); p++) {
+    const pg = await pdf.getPage(p); const alto = pg.getViewport({ scale: 1 }).height;
+    (await pg.getTextContent()).items.forEach(it => { if (it.str && it.str.trim()) raw.push({ p, x: it.transform[4], y: alto - it.transform[5], w: it.width, h: it.height, s: it.str }); });
   }
-  return { items: lineas.map(txt => ({ txt })), matrices: [], texto: lineas.join("\n") };
+  if (!raw.length) throw new Error("El PDF no contiene texto (puede ser una imagen escaneada). Sube la versión en Word o captura los campos a mano.");
+  const plantilla = leerPlantillaPdf(raw);
+  const lineas = plantilla.texto.split("\n").filter(Boolean);
+  let parcial = 0;
+  const items = lineas.map(txt => { const m = n(txt).match(/^(primer|segundo|tercer)o? parcial\b/); if (m) parcial = NUMP[m[1]]; return { txt, parcial }; });
+  return { items, matrices: [], texto: plantilla.texto, plantilla };
+}
+
+/* ---------- tabla de evaluación continua en Word/Excel ---------- */
+function evaluacionMatriz(M) {
+  const out = [];
+  for (let r = 0; r < M.length; r++) {
+    const cols = columnas(M[r]); const iI = cols.findIndex(([, x]) => /^instrumentos? de evaluacion$/.test(n(x.txt))); const iP = cols.findIndex(([, x]) => /^ponderacion$/.test(n(x.txt)));
+    if (iI < 0 || iP < 0) continue;
+    const cI = cols[iI][0], cP = cols[iP][0];
+    const cProd = cols.find(([, x]) => /productos? de aprendizaje/.test(n(x.txt)))?.[0]; const cAsp = cols.find(([, x]) => /aspectos/.test(n(x.txt)))?.[0];
+    for (let i = r + 1; i < M.length; i++) {
+      const ins = M[i]?.[cI]?.txt || ""; if (/^total/.test(n(distintas(M[i]).map(x => x.txt).join(" ")))) break;
+      if (!ins.trim() || M[i - 1]?.[cI] === M[i][cI]) continue;
+      out.push({ producto: cProd != null ? M[i][cProd]?.txt || "" : "", aspectos: cAsp != null ? M[i][cAsp]?.txt || "" : "", instrumento: ins, ponderacion: M[i][cP]?.txt || "", tipo: tipoInst(n(ins)) || "" });
+    }
+    break;
+  }
+  return out;
+}
+
+/* ---------- ¿el anexo evalúa este producto? ---------- */
+const ORGANIZADOR = /\b(mapas?|cuadros?|org|orga|organizadores?|esquemas?|llaves|peine|rueda|diagramas?|lineas? del tiempo|infografias?|mentefactos?|cruci\w*)\b/;
+const VACIAS = new Set(["para", "evaluar", "valorar", "lista", "listas", "cotejo", "rubrica", "analitica", "instrumento", "trabajo", "actividad", "actividades", "alumno", "alumnos", "clase", "general", "producto", "productos", "integrador", "integradora", "integracion", "final", "evidencia", "evidencias", "elaboracion"]);
+function mismoProducto(producto, anexo) {
+  const p = n(producto), a = n(anexo); if (!p || !a) return false;
+  if (/organizador/.test(a) && ORGANIZADOR.test(p)) return true;
+  const raiz = w => w.slice(0, 6);
+  const tp = new Set(p.split(/[^a-zñ]+/).filter(w => w.length >= 4 && !VACIAS.has(w)).map(raiz));
+  return a.split(/[^a-zñ]+/).filter(w => w.length >= 4 && !VACIAS.has(w)).some(w => tp.has(raiz(w)));
+}
+
+/* ---------- combinación por parcial (lo que ve el sistema) ---------- */
+export function combinar(an, parcial) {
+  const G = an?.generales || {}, P = (an?.porParcial || {})[parcial] || {};
+  const une = (...xs) => xs.filter(x => x && String(x).trim()).join("\n\n");
+  const anexos = an?.instrumentos?.anexos || [], menciones = an?.instrumentos?.menciones || [];
+  // cada producto se relaciona con el anexo que realmente lo evalúa (mismo tipo y mismo producto)
+  const evaluacion = (P.evaluacion || G.evaluacion || []).map(e => {
+    const delTipo = anexos.filter(a => a.tipo && a.tipo === e.tipo);
+    const especifico = delTipo.find(a => mismoProducto(e.producto, (a.evalua || "") + " " + (a.titulo || "")));
+    return { ...e, anexo: especifico ? (especifico.titulo || especifico.tipo) : "", estadoAnexo: especifico ? "especifico" : delTipo.length ? "otro" : "no" };
+  });
+  const usados = [...new Set(evaluacion.map(e => e.tipo).filter(Boolean))];
+  const tiposMenc = usados.length ? usados : [...new Set(menciones.map(m => m.tipo))];
+  let estado;
+  if (evaluacion.length) { const k = evaluacion.filter(e => e.estadoAnexo === "especifico").length; estado = k === evaluacion.length ? "Incluye instrumento" : k ? "Desarrollo parcial" : "Solo mencionado"; }
+  else { const conAnexo = tiposMenc.filter(t => anexos.some(a => a.tipo === t)); estado = !tiposMenc.length ? (anexos.length ? "Incluye instrumento" : "No identificado") : conAnexo.length === tiposMenc.length ? "Incluye instrumento" : conAnexo.length ? "Desarrollo parcial" : "Solo mencionado"; }
+  const txt = [];
+  if (evaluacion.length) txt.push(`Evaluación continua${parcial ? " del parcial " + parcial : ""}:\n` + evaluacion.map(e => `• ${e.producto || "Actividad"} — ${e.instrumento}${e.ponderacion ? " (" + e.ponderacion + ")" : ""}${e.aspectos ? ". Evalúa: " + e.aspectos : ""}. ${e.estadoAnexo === "especifico" ? "Desarrollado en anexo: " + e.anexo : "Sin desarrollo en el documento"}.`).join("\n"));
+  if (anexos.length) txt.push("Instrumentos desarrollados en el documento:\n" + anexos.map(a => `• ${a.titulo || a.tipo}${a.criterios?.length ? ` — ${a.criterios.length} criterios: ${a.criterios.slice(0, 6).join("; ")}${a.criterios.length > 6 ? "…" : ""}` : ""}`).join("\n"));
+  if (!evaluacion.length) { const faltan = tiposMenc.filter(t => !anexos.some(a => a.tipo === t)); if (faltan.length) txt.push("Sin desarrollo en el documento (solo se nombran): " + faltan.join(", ")); }
+  if (!txt.length && G.instrumentos) txt.push("Indicado en la planeación:\n" + G.instrumentos);
+  if (!txt.length) txt.push("No se identificaron instrumentos de evaluación en el documento.");
+  return {
+    progresion: P.progresion || G.progresion || "",
+    proposito: une(G.proposito, P.proposito),
+    contenidos: une(P.contenidos, (!P.contenidos || parcial === 1) && G.contenidos ? (P.contenidos ? "Curso de inducción / nivelación: " : "") + G.contenidos : ""),
+    estrategias: P.estrategias || G.estrategias || "",
+    instrumentos: txt.join("\n\n"), evaluacion, estadoInstr: estado, tiposInstr: tiposMenc, anexos
+  };
 }
 
 /* ---------- punto de entrada ---------- */
@@ -316,16 +390,32 @@ export async function analizarPlaneacion(nombre, buf) {
   if (ext === "docx") L = await leerDocx(buf);
   else if (ext === "xlsx" || ext === "xls") L = await leerXlsx(buf);
   else if (ext === "pdf") L = await leerPdf(buf);
-  else return { formato: ext, soportado: false, campos: {}, texto: "", transversalidad: null, instrumentos: null };
-  const { v, push } = acumulador();
-  L.matrices.forEach(M => desdeMatriz(M, push));
-  desdeLineas(L.items, push);
-  const campos = {};
-  Object.entries(v).forEach(([k, arr]) => { if (k !== "instrumentos") campos[k] = arr.join("\n\n").slice(0, 2500); });
+  else return { formato: ext, soportado: false, version: 3, generales: {}, porParcial: {}, texto: "", transversalidad: null, instrumentos: null };
+  const acc = { 0: acumulador(), 1: acumulador(), 2: acumulador(), 3: acumulador() };
+  (L.segmentos || L.matrices.map(M => ({ M, parcial: 0 }))).forEach(sg => desdeMatriz(sg.M, acc[sg.parcial || 0].push));
+  const porGrupo = {}; L.items.forEach(it => (porGrupo[it.parcial || 0] = porGrupo[it.parcial || 0] || []).push(it));
+  Object.entries(porGrupo).forEach(([p, arr]) => desdeLineas(arr, acc[p].push));
+  const aCampos = v => Object.fromEntries(Object.entries(v).map(([k, arr]) => [k, arr.join(k === "estrategias" ? "; " : "\n\n").slice(0, 2500)]));
+  let generales = aCampos(acc[0].v); const porParcial = {};
+  [1, 2, 3].forEach(p => { const c = aCampos(acc[p].v); if (Object.keys(c).length) porParcial[p] = c; });
+  (L.segmentos || []).forEach(sg => { const ev = evaluacionMatriz(sg.M); if (ev.length) { const d = sg.parcial ? (porParcial[sg.parcial] = porParcial[sg.parcial] || {}) : generales; d.evaluacion = [...(d.evaluacion || []), ...ev]; } });
+  const T = L.plantilla;
+  if (T && (Object.keys(T.porParcial).length || T.generales.proposito)) {   // PDF de la plantilla: la lectura por posición manda
+    generales = { ...T.generales };                     // se descarta la lectura por renglones (mezcla columnas en PDF)
+    [1, 2, 3].forEach(p => { delete porParcial[p]; if (T.porParcial[p]) porParcial[p] = { ...T.porParcial[p] }; });
+  }
   const lineasTodas = L.texto.split("\n").filter(Boolean);
   const ins = instrumentos(L.items, L.matrices, lineasTodas);
-  const declarado = (v.instrumentos || []).join("\n");
-  campos.instrumentos = [resumenInstrumentos(ins), declarado ? "Indicado en la planeación:\n" + declarado : ""].filter(Boolean).join("\n\n").slice(0, 2500);
-  if (ins.estado === "No identificado" && declarado) ins.estado = "Solo mencionado";
-  return { formato: ext, soportado: true, campos, texto: L.texto.slice(0, 40000), transversalidad: transversalidad(L.items, L.matrices), instrumentos: ins };
+  const anexos = [...(T?.anexos || [])];
+  ins.anexos.forEach(a => { if (!anexos.some(b => n(b.titulo) === n(a.titulo))) anexos.push(a); });
+  // datos generales del documento (sirven para asociar la planeación)
+  const SEM = { primero: 1, segundo: 2, tercero: 3, cuarto: 4, quinto: 5, sexto: 6 };
+  const dd = { asignatura: generales.asignatura || "", docente: generales.docente || "", grupo: generales.grupo || "", semestre: generales.semestre || "" };
+  const sem = SEM[n(dd.semestre).split(" ")[0]] || +(n(dd.semestre).match(/\d/) || [0])[0] || null;
+  const g = String(dd.grupo).replace(/\D/g, "");
+  dd.grupoNum = g.length === 3 ? g : (g && sem ? String(sem * 100 + +g) : "");
+  ["asignatura", "docente", "grupo", "semestre", "semestreNum", "grupoNum"].forEach(k => delete generales[k]);
+  return { formato: ext, soportado: true, version: 3, texto: L.texto.slice(0, 40000), generales, porParcial, datosDoc: dd,
+    parciales: T?.parciales || Object.keys(porParcial).map(Number),
+    transversalidad: (T?.transversalidad) || transversalidad(L.items, L.matrices), instrumentos: { anexos, menciones: ins.menciones } };
 }

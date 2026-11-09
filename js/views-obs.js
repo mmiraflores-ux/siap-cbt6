@@ -4,7 +4,7 @@ import {
   isOri, canObserve, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES
 } from "./core.js";
 import { setQ, dropQ, go, listaObs } from "./app.js";
-import { formSesion, wireSesion, crearSesion, evidenciaInput, evidenciaHtml, guardarEvidencia } from "./views-plan.js";
+import { formSesion, wireSesion, crearSesion, evidenciaInput, evidenciaHtml, guardarEvidencia, valorPlan, camposPlan } from "./views-plan.js";
 
 const BL = () => window.BLOOM;
 const observadores = () => L("personas").filter(p => (p.roles || []).some(r => ["subdirectora", "apoyo", "orientadora"].includes(r))).sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -101,7 +101,7 @@ VIEWS.obs = {
       <div class="grid g4" style="font-size:.86rem"><div><small class="muted">Docente</small><br><b>${esc(pname(o.docenteId))}</b></div><div><small class="muted">Observa</small><br><b>${esc(pname(o.observadorId))}</b></div>
       <div><small class="muted">Unidad curricular</small><br>${esc(short(afull(o.asignacionId), 70))}</div><div><small class="muted">Instrumento</small><br>${esc(ins.nombre)} · v${o.instrumentoVersion || ins.version}</div></div>
       ${ant ? `<p class="note info">Continuidad con la observación del ${fdate(ant.fecha)} (<a href="#/obs/${ant.id}">ver</a>). Los antecedentes contextualizan; no sustituyen la evidencia de esta sesión.</p>` : ""}
-      ${pl ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Lo planeado (planeación v${pl.version || 1})</summary><p style="font-size:.85rem"><b>Progresión:</b> ${esc(pl.progresion || pl.extraido?.progresion || "—")}<br><b>Propósito:</b> ${esc(pl.proposito || pl.extraido?.proposito || "—")}<br><b>Estrategias:</b> ${esc(short(pl.estrategias || pl.extraido?.estrategias || "—", 400))}</p></details>` : `<p class="faint" style="font-size:.8rem">Sesión sin planeación vinculada.</p>`}
+      ${pl ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Lo planeado (planeación v${pl.version || 1})</summary><p style="font-size:.85rem"><b>Progresión:</b> ${esc(valorPlan(pl, "progresion") || "—")}<br><b>Propósito:</b> ${esc(short(valorPlan(pl, "proposito") || "—", 500))}<br><b>Estrategias:</b> ${esc(short(valorPlan(pl, "estrategias") || "—", 400))}</p></details>` : `<p class="faint" style="font-size:.8rem">Sesión sin planeación vinculada.</p>`}
     </div>`;
 
     /* --- contexto del docente --- */
@@ -118,8 +118,9 @@ VIEWS.obs = {
     else if (!det && !soyDoc && ["Programada", "En captura"].includes(o.estado)) h += `<div class="card"><p class="muted">Aún no hay registro del observador.</p></div>`;
 
     /* --- autorreflexión --- */
-    if (soyDoc && !ar?.enviada) h += formAutorreflexion(o, ar, ins);
-    else if (ar?.enviada && (soyDoc || soyObs || staff)) h += `<div class="card"><div class="card-h"><h3>Autorreflexión del docente</h3>${chip("Enviada " + fdate(ar.fechaEnvio), "g")}</div>${(ins.preguntasAutorreflexion || []).map((q, i) => `<p><b>${esc(q)}</b><br>${esc(ar["q" + (i + 1)] || "—")}</p>`).join("")}</div>`;
+    if (soyDoc && !ar?.enviada) h += (ar?.reaperturas?.length ? `<p class="note">La Subdirección reabrió tu autorreflexión para corrección: “${esc(ar.reaperturas.slice(-1)[0].motivo)}”. Corrige tus respuestas y vuelve a enviarla.</p>` : "") + formAutorreflexion(o, ar, ins);
+    else if (!soyDoc && ar && !ar.enviada && ar.reaperturas?.length && (soyObs || staff)) h += `<div class="card"><h3>Autorreflexión</h3><p class="note">Reabierta para corrección el ${fdate(ar.reaperturas.slice(-1)[0].fecha)}. Esperando que el docente la vuelva a enviar.</p>${historialAR(ar, ins)}</div>`;
+    else if (ar?.enviada && (soyDoc || soyObs || staff)) h += vistaAutorreflexion(o, ar, ins, isSub() && !soyDoc);
     else if ((soyObs || staff) && !soyDoc && o.detalleBloqueado) h += `<div class="card"><h3>Autorreflexión</h3><p class="muted">El docente aún no envía su autorreflexión.</p></div>`;
 
     /* --- diálogo reflexivo --- */
@@ -147,9 +148,11 @@ VIEWS.obs = {
 
 function formObservacion(o, det, crit, ins, pl) {
   det = det || {};
-  const verbosPl = pl?.bloom?.verbos ? Object.keys(pl.bloom.verbos) : [];
+  const verbosProg = Object.keys(BL().analizar(valorPlan(pl, "progresion")).verbos || {});
+  const verbosPl = verbosProg.length ? verbosProg : (pl?.bloom?.verbos ? Object.keys(pl.bloom.verbos) : []);
   const BN = BL().NIVELES;
-  const bp = det.bloomPlaneado || pl?.bloomProgresion || pl?.bloom?.maxNivel || "";
+  const prog = valorPlan(pl, "progresion");
+  const bp = det.bloomPlaneado || (prog ? BL().analizar(prog).maxNivel : null) || pl?.bloom?.maxNivel || "";
   return `<form class="card" data-form="obsDetalle" data-id="${o.id}"><div class="card-h"><h3>Registro de observación</h3>${chip("Borrador visible solo para el equipo", "")}</div>
     <p class="muted" style="font-size:.84rem">Distingue lo observado directamente, la evidencia disponible y tu interpretación pedagógica. Los criterios no aplicables no penalizan.</p>
     ${crit.map(c => { const v = det.respuestas?.[c.id] || {}; return `<div class="crit"><div class="ct"><b>${esc(c.texto)}</b><div class="scale">${ins.escala.map((e, i) => `<input type="radio" name="n_${c.id}" id="${c.id}_${i}" value="${e}" ${v.nivel === e ? "checked" : ""}><label for="${c.id}_${i}">${e}</label>`).join("")}</div></div>
@@ -179,8 +182,31 @@ function formAutorreflexion(o, ar, ins) {
   return `<form class="card" data-form="autorref" data-id="${o.id}"><div class="card-h"><h3>Mi autorreflexión</h3>${chip("Antes de ver la valoración del observador", "m")}</div>
     <p class="muted" style="font-size:.84rem">Respuestas descriptivas y abiertas. Al enviarla podrás consultar el registro de quien te observó${o.detalleBloqueado ? "" : " (cuando lo cierre)"}.</p>
     ${(ins.preguntasAutorreflexion || []).map((q, i) => `<div class="f"><label>${esc(q)}</label><textarea name="q${i + 1}">${esc(ar["q" + (i + 1)] || "")}</textarea></div>`).join("")}
+    <p class="faint" style="font-size:.78rem">“Guardar borrador” te permite seguir editando. Al pulsar “Enviar”, tus respuestas quedan registradas y ya no se pueden modificar, salvo que la Subdirección autorice una reapertura.</p>
     <div class="row end"><button class="btn" value="borrador">Guardar borrador</button><button class="btn pri" value="enviar">Enviar autorreflexión</button></div></form>`;
 }
+function historialAR(ar, ins) {
+  const vs = ar.versiones || []; if (!vs.length) return "";
+  return `<details style="margin-top:10px"><summary class="muted" style="cursor:pointer;font-size:.85rem">Versiones anteriores (${vs.length})</summary>${vs.slice().reverse().map(v => `<div class="card flat" style="margin-top:8px"><small class="muted">Enviada ${fdate(v.fechaEnvio)} · reabierta ${fdate(v.reabierta)} por ${esc(pname(v.reabiertaPor))}: ${esc(v.motivo || "")}</small>
+    ${(ins.preguntasAutorreflexion || []).map((q, i) => `<p style="font-size:.85rem"><b>${esc(q)}</b><br>${esc(v["q" + (i + 1)] || "—")}</p>`).join("")}</div>`).join("")}</details>`;
+}
+function vistaAutorreflexion(o, ar, ins, puedeReabrir) {
+  return `<div class="card"><div class="card-h"><h3>Autorreflexión del docente</h3>${chip("Enviada " + fdate(ar.fechaEnvio), "g")}${(ar.versiones || []).length ? chip("Corregida " + ar.versiones.length + "×", "a") : ""}
+    ${puedeReabrir ? `<button class="btn sm" data-act="reabrirAR" data-id="${o.id}">Reabrir para corrección</button>` : ""}</div>
+    ${(ins.preguntasAutorreflexion || []).map((q, i) => `<p><b>${esc(q)}</b><br>${esc(ar["q" + (i + 1)] || "—")}</p>`).join("")}${historialAR(ar, ins)}</div>`;
+}
+ACT.reabrirAR = el => {
+  const ar = byId("autorreflexiones", el.dataset.id), ob = byId("observaciones", el.dataset.id); if (!ar) return;
+  modal({ title: "Reabrir autorreflexión", submit: "Reabrir",
+    body: `<p>El docente <b>${esc(pname(ar.docenteId))}</b> podrá corregir y volver a enviar su autorreflexión. Las respuestas actuales se conservan como versión anterior y la reapertura queda en la auditoría.</p>
+    <div class="f"><label>Motivo de la reapertura</label><textarea name="motivo" required placeholder="Ej. Se envió con texto de prueba; capturar la autorreflexión real."></textarea></div>`,
+    onSubmit: async o => {
+      const v = { q1: ar.q1, q2: ar.q2, q3: ar.q3, q4: ar.q4, fechaEnvio: ar.fechaEnvio, reabierta: nowISO(), reabiertaPor: me(), motivo: o.motivo };
+      await save("autorreflexiones", ar.id, { enviada: false, versiones: [...(ar.versiones || []), v], reaperturas: [...(ar.reaperturas || []), { fecha: nowISO(), por: me(), motivo: o.motivo }] }, "reapertura de autorreflexión");
+      notify(ar.docenteId, "Autorreflexión", `La Subdirección reabrió tu autorreflexión (${alabel(ob?.asignacionId)}) para corrección: ${short(o.motivo, 60)}`, "#/obs/" + ar.id, ar.id + "re" + Date.now());
+      toast("Autorreflexión reabierta. Se notificó al docente.");
+    } });
+};
 function formDialogo(o, dl, ins) {
   dl = dl || {};
   const part = dl.participantes || [o.docenteId, o.observadorId];
@@ -231,6 +257,7 @@ FORMS.autorref = async (o, f, btn) => {
   const ob = byId("observaciones", f.dataset.id);
   const enviar = btn === "enviar";
   if (enviar && !o.q1 && !o.q2 && !o.q3 && !o.q4) { toast("Escribe al menos una respuesta.", true); return; }
+  if (enviar && !confirm("¿Enviar tu autorreflexión? Después ya no podrás modificarla, salvo que la Subdirección autorice una reapertura.")) return;
   await save("autorreflexiones", ob.id, { observacionId: ob.id, docenteId: ob.docenteId, observadorId: ob.observadorId, q1: o.q1, q2: o.q2, q3: o.q3, q4: o.q4, enviada: enviar, ...(enviar ? { fechaEnvio: nowISO() } : {}) }, "autorreflexión");
   if (enviar) {
     await save("observaciones", ob.id, { autorreflexionCompleta: true, autorreflexionFecha: nowISO() }, "autorreflexión enviada");
