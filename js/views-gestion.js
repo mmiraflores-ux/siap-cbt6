@@ -13,8 +13,11 @@ VIEWS.paec = {
   title: "Proyectos Aula-Escuela-Comunidad (PAEC)",
   render(r) {
     if (r.q.id) return detallePAEC(byId("paec", r.q.id));
+    const tab = r.q.tab || "proyectos";
+    const tabs = `<div class="tabs"><button class="${tab === "proyectos" ? "on" : ""}" onclick="SIAP.go('/paec')">Proyectos</button><button class="${tab === "transversalidad" ? "on" : ""}" onclick="SIAP.go('/paec?tab=transversalidad')">Transversalidad planeada</button></div>`;
+    if (tab === "transversalidad") return tabs + vistaTransversalidad(r.q);
     const ps = L("paec").slice().sort((a, b) => (b.creado || "").localeCompare(a.creado || ""));
-    return `<div class="card"><div class="card-h"><h2>Proyectos transversales · ${ps.length}</h2>${isStaff() || isVinc() ? `<button class="btn pri" data-act="editPAEC">+ Nuevo proyecto</button>` : ""}</div>
+    return tabs + `<div class="card"><div class="card-h"><h2>Proyectos transversales · ${ps.length}</h2>${isStaff() || isVinc() ? `<button class="btn pri" data-act="editPAEC">+ Nuevo proyecto</button>` : ""}</div>
       <p class="muted">Coordina proyectos que articulan aprendizajes de varias UAC en torno a una problemática de la comunidad. La matriz muestra la articulación <b>horizontal</b> (distintos currículos en un mismo semestre) y <b>vertical</b> (continuidad entre semestres).</p>
       ${ps.length ? `<div class="grid g3">${ps.map(p => { const asg = (p.asignaciones || []).map(A).filter(Boolean); const sems = [...new Set(asg.map(a => a.semestre))].sort();
         return `<div class="card flat" style="cursor:pointer" onclick="SIAP.go('/paec?id=${p.id}')"><div class="row">${chipEstado(p.estado)}<span class="sp"></span><small class="muted">${esc(p.periodo || "")}</small></div>
@@ -24,6 +27,20 @@ VIEWS.paec = {
   }
 };
 
+function tablaTransv(t) {
+  if (!t.rows.length) return `<div class="empty">Ninguna planeación vigente incluye actividades en la tabla “Transversalidad curricular”${isStaff() ? ". Si ya cargaste planeaciones, usa “Analizar de nuevo” en Planeaciones." : "."}</div>`;
+  return `<div class="tw"><table><thead><tr>${t.cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${t.rows.map(r => `<tr>${r.map((c, i) => `<td>${i === 1 ? `<b>${esc(String(c).split(" — ")[0])}</b><span class="sub">${esc(short(String(c).split(" — ")[1] || "", 70))}</span>` : esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function vistaTransversalidad(q) {
+  const t = transversalidadPlaneada(q);
+  const porGrupo = {}; t.rows.forEach(r => { porGrupo[r[0]] = porGrupo[r[0]] || new Set(); porGrupo[r[0]].add(r[1]); });
+  return `<div class="card"><div class="card-h"><h2>Transversalidad planeada · ${t.rows.length} actividades</h2><a class="btn" href="#/reportes?tipo=transversalidad">Ver reporte / exportar</a></div>
+    <p class="muted">Actividades que cada docente declaró en la tabla <b>“Transversalidad curricular”</b> de su planeación vigente. Sirve para identificar coincidencias entre UAC de un mismo grupo (articulación horizontal) y entre semestres (vertical), y convertirlas en proyectos PAEC.</p>
+    <div class="filters"><select data-filter="parcial"><option value="">Todos los parciales</option>${[1, 2, 3].map(n => opt(n, "Parcial " + n, q.parcial)).join("")}</select>
+    <select data-filter="grupo"><option value="">Todos los grupos</option>${L("grupos").map(g => g.id).sort().map(g => opt(g, "Grupo " + g, q.grupo)).join("")}</select></div>
+    ${Object.keys(porGrupo).length ? `<div class="row" style="margin-bottom:10px">${Object.entries(porGrupo).sort().map(([g, s]) => chip(`Grupo ${g}: ${s.size} UAC con actividades transversales`, s.size > 1 ? "g" : "")).join(" ")}</div>` : ""}
+    ${tablaTransv(t)}</div>`;
+}
 function matriz(p) {
   const asg = (p.asignaciones || []).map(A).filter(Boolean);
   const sems = [...new Set([...(p.grupos || []).map(g => L("grupos").find(x => x.id === g)?.semestre), ...asg.map(a => a.semestre)].filter(Boolean))].sort();
@@ -55,6 +72,8 @@ function detallePAEC(p) {
     <div><small class="muted">Responsable</small><p>${esc(pname(p.responsableId))}${p.vinculacionId ? ` · Vinculación: ${esc(pname(p.vinculacionId))}` : ""}</p><small class="muted">Periodo · parciales</small><p>${esc(p.periodo || "")} · ${(p.parciales || []).map(n => "P" + n).join(", ") || "—"}</p>
     <small class="muted">Productos esperados</small><p>${esc(p.productos || "—")}</p></div></div></div>
   <div class="card"><h3 style="margin-bottom:10px">Matriz de articulación</h3>${matriz(p)}</div>
+  <div class="card"><h3 style="margin-bottom:6px">Lo que los docentes planearon para este proyecto</h3><p class="muted" style="font-size:.85rem">Actividades de la tabla “Transversalidad curricular” en las planeaciones vigentes de las UAC participantes.</p>
+    ${tablaTransv(transversalidadPlaneada({ asig: p.asignaciones || [] }))}</div>
   <div class="card"><div class="card-h"><h3>Bitácora de avances</h3>${puedePAEC(p) || participa ? `<button class="btn sm pri" data-act="avancePAEC" data-id="${p.id}">+ Registrar avance</button>` : ""}</div>
     ${av.length ? `<div class="tl">${av.map(a => `<div class="it"><b>${fdate(a.fecha)}</b> · ${esc(pname(a.personaId))}${a.asignacionId ? " · " + esc(alabel(a.asignacionId)) : ""} ${a.parcial ? chip("P" + a.parcial) : ""}<br>${esc(a.texto)}${a.enlace ? ` · <a href="${esc(a.enlace)}" target="_blank" rel="noopener">evidencia ↗</a>` : ""}</div>`).join("")}</div>` : `<div class="empty">Sin avances registrados.</div>`}</div>`;
 }
@@ -97,7 +116,31 @@ ACT.avancePAEC = el => {
 };
 
 /* ======================= REPORTES ======================= */
-const TIPOS = [["planeaciones", "Planeaciones"], ["acompanamiento", "Acompañamiento"], ["retro", "Retroalimentación"], ["acuerdos", "Acuerdos"], ["alertas", "Incidencias y alertas"], ["historico", "Histórico"], ["paec", "Articulación PAEC"]];
+/* Actividades transversales declaradas en las planeaciones vigentes (tabla “Transversalidad curricular”) */
+export function transversalidadPlaneada(q = {}) {
+  const pls = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.transversalidad && p.asignacionId)
+    .filter(p => (!q.parcial || p.parcial == q.parcial) && (!q.grupo || p.grupo === q.grupo) && (!q.doc || p.docenteId === q.doc) && (!q.asig || (q.asig || []).includes(p.asignacionId)))
+    .sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || (a.parcial - b.parcial));
+  // Cada docente nombra distinto las columnas: se agrupan por significado
+  const rol = h => { const t = n2(h); return /\b(uac|asignaturas?|submodulos?|modulos?|materias?|vincula|disciplinas?|campos?|areas?)\b/.test(t) ? "vinculo"
+    : /\b(actividad(es)?|accion(es)?|estrategias?|descripcion|transversalidad)\b/.test(t) ? "actividad" : /\b(productos?|evidencias?|entregables?)\b/.test(t) ? "producto" : "otro"; };
+  const cols = ["Grupo", "Unidad curricular", "Docente", "Parcial", "Se vincula con", "Actividad planeada", "Producto", "Otros datos"];
+  const rows = [];
+  pls.forEach(p => {
+    const base = [p.grupo, `${UC(p.unidadId)?.abrev || ""} — ${afull(p.asignacionId)}`, pname(p.docenteId), p.parcial];
+    const t = p.transversalidad;
+    if (!t.filas?.length) { rows.push([...base, "", t.texto || "", "", ""]); return; }
+    const roles = t.headers.map(rol);
+    t.filas.forEach(f => {
+      const v = { vinculo: [], actividad: [], producto: [], otro: [] };
+      f.celdas.forEach((c, i) => { if (!String(c).trim()) return; const r = roles[i] || "otro"; v[r].push(r === "otro" ? `${t.headers[i]}: ${c}` : c); });
+      rows.push([...base, v.vinculo.join("; "), v.actividad.join("; "), v.producto.join("; "), v.otro.join(" · ")]);
+    });
+  });
+  return { cols, rows, planeaciones: pls.length };
+}
+const n2 = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const TIPOS = [["planeaciones", "Planeaciones"], ["instrumentos", "Instrumentos de evaluación"], ["transversalidad", "Transversalidad (PAEC)"], ["acompanamiento", "Acompañamiento"], ["retro", "Retroalimentación"], ["acuerdos", "Acuerdos"], ["alertas", "Incidencias y alertas"], ["historico", "Histórico"], ["paec", "Articulación PAEC"]];
 function datosReporte(tipo, q) {
   const fGrupo = x => !q.grupo || x.grupo === q.grupo || A(x.asignacionId)?.grupo === q.grupo;
   const fDoc = x => !q.doc || x.docenteId === q.doc;
@@ -132,6 +175,20 @@ function datosReporte(tipo, q) {
     const rows = L("auditoria").slice().sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, 500).map(a => [fdt(a.ts), a.nombre || pname(a.personaId), a.accion, a.col, a.docId]);
     return { cols, rows, nota: "Últimos 500 movimientos auditados del ciclo." };
   }
+  if (tipo === "instrumentos") {
+    const cols = ["Grupo", "Unidad curricular", "Docente", "Parcial", "¿Tiene instrumento?", "Instrumentos", "¿Qué evalúa?", "Criterios identificados"];
+    const rows = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.asignacionId).filter(fGrupo).filter(fDoc).filter(fPar)
+      .sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || a.parcial - b.parcial).map(p => {
+        const ie = p.instrumentosEval;
+        return [p.grupo, alabel(p.asignacionId), pname(p.docenteId), p.parcial, ie ? ie.estado : "Sin analizar", ie ? (ie.tipos || []).join(", ") : "",
+          ie ? (ie.anexos || []).map(a => a.evalua || a.titulo).filter(Boolean).join(" · ") : "", ie ? (ie.anexos || []).map(a => (a.criterios || []).join("; ")).filter(Boolean).join(" | ") : ""];
+      });
+    return { cols, rows, nota: "“Solo mencionado” indica que el documento nombra un instrumento pero no incluye sus criterios o niveles. “Sin analizar” se resuelve con “Analizar de nuevo” en Planeaciones. Es información descriptiva, no una calificación." };
+  }
+  if (tipo === "transversalidad") {
+    const t = transversalidadPlaneada(q);
+    return { cols: t.cols, rows: t.rows, nota: `${t.planeaciones} planeaciones vigentes incluyen la tabla “Transversalidad curricular”. Cada fila es una actividad que el docente planea realizar.` };
+  }
   if (tipo === "paec") {
     const cols = ["Proyecto", "Estado", "Grupos", "Semestres", "UAC articuladas", "Currículos", "Avances"];
     const rows = L("paec").map(p => { const as = (p.asignaciones || []).map(A).filter(Boolean); return [p.nombre, p.estado, (p.grupos || []).join(", "), [...new Set(as.map(a => a.semestre))].sort().join(", "), as.map(a => alabel(a)).join(", "), [...new Set(as.map(a => UC(a.unidadId)?.curriculum))].join(", "), L("paec_avances").filter(x => x.paecId === p.id).length]; });
@@ -159,8 +216,8 @@ VIEWS.reportes = {
 let xlsxP = null;
 ACT.xlsx = async el => {
   const tipo = el.dataset.tipo; const { cols, rows } = datosReporte(tipo, S.route.q);
-  xlsxP = xlsxP || new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
-  await xlsxP;
+  if (!window.XLSX) xlsxP = xlsxP || new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+  if (!window.XLSX) await xlsxP;
   const ws = window.XLSX.utils.aoa_to_sheet([[`${CFG.institucion.nombre} · Reporte ${tipo} · ${today()}`], [], cols, ...rows]);
   ws["!cols"] = cols.map(() => ({ wch: 28 }));
   const wb = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(wb, ws, "Reporte");

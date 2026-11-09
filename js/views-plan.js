@@ -4,30 +4,22 @@ import {
   isOri, canObserve, me, norm, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, BLOQUES, DIAS, byId
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
+import { analizarPlaneacion, resumenInstrumentos } from "./extractor.js";
 
 const BL = () => window.BLOOM;
 
-/* ---------------- utilidades de archivo ---------------- */
-let mammothP = null;
-const loadScript = src => new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("No se pudo cargar " + src)); document.head.appendChild(s); });
-async function extraerTexto(file, buf) {
-  const n = file.name.toLowerCase();
-  if (n.endsWith(".docx")) {
-    try { mammothP = mammothP || loadScript("https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"); await mammothP;
-      const r = await window.mammoth.extractRawText({ arrayBuffer: buf.slice(0) }); return r.value || ""; } catch (e) { console.warn(e); return ""; }
-  }
-  return "";
-}
-/* Solo se muestra lo que realmente aparece en el documento (detección por encabezados) */
-function extraerSecciones(txt) {
-  const out = {}; if (!txt) return out;
-  const lines = txt.split(/\n+/).map(l => l.trim()).filter(Boolean);
-  const keys = { progresion: /progresi[oó]n/i, proposito: /prop[oó]sito|meta de aprendizaje|aprendizaje (esperado|de trayectoria)/i, contenidos: /contenido|tema|categor[ií]a/i, estrategias: /estrategia|actividades? (de|did)/i, instrumentos: /instrumento|r[uú]brica|lista de cotejo|evaluaci[oó]n/i };
-  Object.entries(keys).forEach(([k, re]) => {
-    const i = lines.findIndex(l => re.test(l) && l.length < 120);
-    if (i >= 0) { const seg = lines.slice(i + 1, i + 4).join(" "); if (seg.length > 10) out[k] = short(seg, 420); }
-  });
-  return out;
+/* ---------------- lectura de planeaciones ---------------- */
+/* Analiza el archivo y devuelve los datos que se guardan en la planeación */
+async function datosDeAnalisis(nombre, buf) {
+  let an;
+  try { an = await analizarPlaneacion(nombre, buf); }
+  catch (e) { console.warn(e); return { analisis: { fecha: nowISO(), error: e.message || String(e) } }; }
+  const bloom = an.texto ? BL().analizar(an.texto) : null;
+  return {
+    texto: an.texto || "", extraido: an.campos || {}, transversalidad: an.transversalidad || null, instrumentosEval: an.instrumentos || null,
+    bloom: bloom ? { conteo: bloom.conteo, verbos: bloom.verbos, predominante: bloom.predominante, maxNivel: bloom.maxNivel, total: bloom.total } : null,
+    analisis: { fecha: nowISO(), formato: an.formato, soportado: an.soportado, version: 2, error: "" }
+  };
 }
 export async function guardarArchivo(file, meta) {
   const max = (CFG.maxArchivoMB || 5) * 1024 * 1024;
@@ -81,9 +73,8 @@ export function resolverAsignacion(it, parcial) {
 
 async function registrarPlaneacion({ asignacionId, parcial, file, enlace, estadoAsociacion, interpretacion, motivos }) {
   const a = A(asignacionId);
-  let archivoId = "", texto = "", nombre = file?.name || "";
-  if (file) { const r = await guardarArchivo(file, { docenteId: a?.docenteId || "" }); archivoId = r.id; texto = await extraerTexto(file, r.buf); }
-  const bloom = texto ? BL().analizar(texto) : null;
+  let archivoId = "", nombre = file?.name || "", datos = {};
+  if (file) { const r = await guardarArchivo(file, { docenteId: a?.docenteId || "" }); archivoId = r.id; datos = await datosDeAnalisis(file.name, r.buf); }
   const prev = a ? L("planeaciones").filter(x => x.asignacionId === a.id && x.parcial == parcial && x.estado !== "Sustituida") : [];
   const version = prev.length ? Math.max(...prev.map(x => x.version || 1)) + 1 : 1;
   for (const p of prev) await save("planeaciones", p.id, { estado: "Sustituida", sustituidaPor: version }, "nueva versión");
@@ -92,8 +83,7 @@ async function registrarPlaneacion({ asignacionId, parcial, file, enlace, estado
     ciclo: CFG.institucion.cicloActual, periodo: CFG.institucion.periodoActual, parcial: +parcial,
     asignacionId: a?.id || "", docenteId: a?.docenteId || "", grupo: a?.grupo || interpretacion?.grupo || "", unidadId: a?.unidadId || "",
     archivoNombre: nombre, archivoId, enlace: enlace || "", estadoAsociacion, estado: "Cargada", version,
-    interpretacion: interpretacion || null, motivos: motivos || [], texto: texto.slice(0, 40000), extraido: extraerSecciones(texto),
-    bloom: bloom ? { conteo: bloom.conteo, verbos: bloom.verbos, predominante: bloom.predominante, maxNivel: bloom.maxNivel, total: bloom.total } : null,
+    interpretacion: interpretacion || null, motivos: motivos || [], texto: "", extraido: {}, transversalidad: null, instrumentosEval: null, bloom: null, ...datos,
     cargadoPor: me() || S.user.uid, fechaCarga: nowISO(), validadoPor: estadoAsociacion === "Identificado" ? me() : ""
   }, "carga de planeación");
   if (a && a.docenteId !== me()) notify(a.docenteId, "Planeación", `Se registró tu planeación de ${alabel(a)} · parcial ${parcial} (v${version}).`, "#/planeaciones?id=" + id, id);
@@ -118,23 +108,49 @@ VIEWS.planeaciones = {
     const docs = [...new Set(L("planeaciones").map(p => p.docenteId).filter(Boolean))].map(P).filter(Boolean).sort((a, b) => a.nombre.localeCompare(b.nombre));
     const BN = BL().NIVELES;
     return `<div class="card"><div class="card-h"><h2>Planeaciones · ${arr.length}</h2>
-      ${isStaff() ? `<button class="btn pri" data-act="cargaMasiva">⇪ Carga masiva</button>` : ""}${isDoc() ? `<button class="btn" data-act="subirPlan">+ Subir mi planeación</button>` : ""}</div>
+      ${isStaff() ? `<button class="btn" data-act="reanalizarTodas" title="Vuelve a leer los archivos ya cargados con el lector actual">↻ Analizar de nuevo</button><button class="btn pri" data-act="cargaMasiva">⇪ Carga masiva</button>` : ""}${isDoc() ? `<button class="btn" data-act="subirPlan">+ Subir mi planeación</button>` : ""}</div>
       <p class="muted">Se conserva el archivo original y cada nueva carga crea una versión. El nombre del archivo es solo una ayuda: la asociación se valida contra la asignación académica.</p>
       <div class="filters"><select data-filter="parcial"><option value="">Todos los parciales</option>${[1, 2, 3].map(n => opt(n, "Parcial " + n, q.parcial)).join("")}</select>
       <select data-filter="grupo"><option value="">Todos los grupos</option>${L("grupos").map(g => g.id).sort().map(g => opt(g, "Grupo " + g, q.grupo)).join("")}</select>
       ${isStaff() || isOri() ? `<select data-filter="doc"><option value="">Todas las personas</option>${docs.map(p => opt(p.id, p.nombre, q.doc)).join("")}</select>` : ""}
       <select data-filter="asoc"><option value="">Toda asociación</option>${opt("pend", "Por revisar / no resueltas", q.asoc)}</select>
       <label class="checks"><label><input type="checkbox" ${q.vers ? "checked" : ""} onchange="SIAP_setQ('vers', this.checked?'1':'')"> Ver versiones anteriores</label></label></div>
-      <div class="tw"><table><thead><tr><th>Asignación</th><th>Docente</th><th class="num">Parcial</th><th class="num">Ver.</th><th>Archivo</th><th>Asociación</th><th>Bloom predominante</th><th></th></tr></thead><tbody>
+      <div class="tw"><table><thead><tr><th>Asignación</th><th>Docente</th><th class="num">Parcial</th><th class="num">Ver.</th><th>Archivo</th><th>Asociación</th><th>Bloom predominante</th><th>Instrumentos</th><th>Transversalidad</th><th></th></tr></thead><tbody>
       ${arr.map(p => `<tr><td><b>${esc(p.asignacionId ? alabel(p.asignacionId) : (p.interpretacion?.base || "Sin asociar"))}</b><span class="sub">${esc(short(p.asignacionId ? afull(p.asignacionId) : (p.motivos || []).join("; "), 70))}</span></td>
       <td>${esc(pname(p.docenteId))}</td><td class="num">${p.parcial}</td><td class="num">${p.version || 1}${p.estado === "Sustituida" ? " " + chip("anterior") : ""}</td>
       <td>${p.archivoId ? `<button class="btn sm ghost" data-act="descargar" data-file="${p.archivoId}" data-name="${esc(p.archivoNombre)}">⬇ ${esc(short(p.archivoNombre, 28))}</button>` : p.enlace ? `<a href="${esc(p.enlace)}" target="_blank" rel="noopener">Enlace ↗</a>` : "—"}</td>
       <td>${chipEstado(p.estadoAsociacion)}</td><td>${p.bloom?.predominante ? chip(BN[p.bloom.predominante - 1].nombre, "m") : `<span class="faint">—</span>`}</td>
-      <td class="num"><button class="btn sm" data-act="verPlan" data-id="${p.id}">Ver</button></td></tr>`).join("") || `<tr><td colspan="8" class="empty">No hay planeaciones con estos filtros.</td></tr>`}
+      <td>${chipInstr(p)}</td><td>${p.transversalidad ? chip((p.transversalidad.filas || []).length ? p.transversalidad.filas.length + " actividad(es)" : "Descrita", "b") : `<span class="faint">—</span>`}</td>
+      <td class="num"><button class="btn sm" data-act="verPlan" data-id="${p.id}">Ver</button></td></tr>`).join("") || `<tr><td colspan="10" class="empty">No hay planeaciones con estos filtros.</td></tr>`}
       </tbody></table></div></div>`;
   }
 };
 window.SIAP_setQ = (k, v) => setQ(k, v);
+export const chipInstr = p => { const e = p.instrumentosEval?.estado; if (!e) return `<span class="faint">—</span>`; return chip(e, e === "Incluye instrumento" ? "g" : e === "Solo mencionado" ? "a" : ""); };
+
+/* -------- volver a analizar archivos ya cargados -------- */
+async function reanalizar(p) {
+  if (!p.archivoId) throw new Error("Esta planeación es un enlace; no hay archivo para analizar.");
+  const blob = await S.store.getFile(p.archivoId); if (!blob) throw new Error("No se encontró el archivo original.");
+  const d = await datosDeAnalisis(p.archivoNombre, await blob.arrayBuffer());
+  await S.store.set("planeaciones", p.id, { ...d, actualizado: nowISO(), actualizadoPor: me() || "" });
+  return d;
+}
+ACT.reanalizarUna = async el => {
+  const p = byId("planeaciones", el.dataset.id); el.disabled = true; el.textContent = "Analizando…";
+  try { const d = await reanalizar(p); toast(d.analisis?.error ? "No se pudo leer: " + d.analisis.error : "Planeación analizada de nuevo.", !!d.analisis?.error); setTimeout(() => ACT.verPlan({ dataset: { id: p.id } }), 300); }
+  catch (e) { toast(e.message, true); el.disabled = false; el.textContent = "↻ Analizar de nuevo"; }
+};
+ACT.reanalizarTodas = async el => {
+  const arr = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.archivoId);
+  if (!arr.length) return toast("No hay planeaciones con archivo.", true);
+  if (!confirm(`Se volverán a leer ${arr.length} planeaciones con el lector actual. Los campos que alguien corrigió a mano no se modifican. ¿Continuar?`)) return;
+  el.disabled = true; let ok = 0, err = 0;
+  for (const [i, p] of arr.entries()) { el.textContent = `Analizando ${i + 1} de ${arr.length}…`; try { const d = await reanalizar(p); d.analisis?.error ? err++ : ok++; } catch { err++; } }
+  await audit("análisis de planeaciones", "planeaciones", "lote", { analizadas: ok, errores: err });
+  el.disabled = false; el.textContent = "↻ Analizar de nuevo";
+  toast(`${ok} planeaciones analizadas${err ? `, ${err} no se pudieron leer` : ""}.`, !!err);
+};
 
 /* -------- carga individual (docente o apoyo) -------- */
 ACT.subirPlan = el => {
@@ -205,7 +221,8 @@ ACT.verPlan = el => {
   const own = p.docenteId === me(), edit = isStaff() || own;
   const vers = L("planeaciones").filter(x => x.asignacionId && x.asignacionId === p.asignacionId && x.parcial == p.parcial).sort((x, y) => (y.version || 1) - (x.version || 1));
   const ex = p.extraido || {};
-  const campo = (k, t) => `<div class="f"><label>${t} ${ex[k] && !p[k] ? chip("detectado en el documento · verificar", "d") : ""}</label><textarea name="${k}" ${edit ? "" : "readonly"} placeholder="Sin dato identificado en el documento">${esc(p[k] || ex[k] || "")}</textarea></div>`;
+  const campo = (k, t, alto) => `<div class="f"><label>${t} ${p[k] ? chip("corregido a mano", "b") : ex[k] ? chip("tomado del documento · verificar", "d") : ""}</label><textarea name="${k}" ${edit ? "" : "readonly"} ${alto ? 'style="min-height:130px"' : ""} placeholder="Sin dato identificado en el documento">${esc(p[k] || ex[k] || "")}</textarea></div>`;
+  const ie = p.instrumentosEval, tv = p.transversalidad, an = p.analisis || {};
   const tot = b?.total || 0;
   modal({ title: `Planeación · ${a ? alabel(a) : "sin asociar"} · P${p.parcial} · v${p.version || 1}`, wide: true, submit: "Guardar cambios", body: `
     <div class="grid g2"><div>
@@ -221,14 +238,24 @@ ACT.verPlan = el => {
       ${b && tot ? `<div class="bloom">${BN.map(L2 => `<div class="${b.predominante === L2.n ? "on" : ""}"><b>${b.conteo[L2.n]}</b>${L2.nombre}</div>`).join("")}</div>
         <p style="font-size:.8rem;margin-top:8px">Verbos detectados: ${Object.entries(b.verbos).slice(0, 30).map(([v, n]) => chip(v + " · " + BN[n - 1].nombre.slice(0, 4))).join(" ")}</p>
         <p class="faint" style="font-size:.74rem">Análisis automático y descriptivo para orientar el diálogo; no califica la planeación.</p>`
-        : `<p class="muted">${p.archivoNombre?.toLowerCase().endsWith(".docx") ? "No se detectaron verbos." : "El análisis automático está disponible para archivos .docx. Puedes capturar la progresión abajo."}</p>`}
+        : `<p class="muted">${p.texto ? "No se detectaron verbos." : "Sin texto analizado. Usa “Analizar de nuevo” o captura la progresión abajo."}</p>`}
     </div></div><hr>
-    <div class="grid g2">${campo("progresion", "Progresión / aprendizaje de trayectoria")}${campo("proposito", "Propósito / meta de aprendizaje")}${campo("contenidos", "Contenidos")}${campo("estrategias", "Estrategias didácticas")}</div>
-    ${campo("instrumentos", "Instrumentos de evaluación")}
+    ${an.error ? `<p class="note err">No se pudo leer el archivo: ${esc(an.error)}</p>` : p.archivoId && an.version !== 2 ? `<p class="note info">Esta planeación se leyó con el lector anterior. Pulsa <b>“Analizar de nuevo”</b> para identificar progresión, propósito, contenidos, estrategias, transversalidad e instrumentos.</p>` : an.soportado === false ? `<p class="note">El formato .${esc(an.formato)} no se puede leer automáticamente (se aceptan .docx, .xlsx y .pdf). Captura los campos a mano.</p>` : ""}
+    ${p.archivoId && edit ? `<div class="row" style="margin-bottom:8px"><button type="button" class="btn sm" data-act="reanalizarUna" data-id="${p.id}">↻ Analizar de nuevo</button>${an.fecha ? `<small class="faint">Último análisis: ${fdt(an.fecha)}</small>` : ""}</div>` : ""}
+    <div class="grid g2">${campo("progresion", "Progresión / aprendizaje de trayectoria / propósito formativo")}${campo("proposito", "Propósito / meta de aprendizaje")}${campo("contenidos", "Temas / contenidos")}${campo("estrategias", "Metodologías activas / estrategias didácticas")}</div>
+    <div class="card flat" style="margin:4px 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Instrumentos de evaluación</h3>${chipInstr(p)}</div>
+      ${ie && ie.anexos?.length ? `<div class="tw" style="margin-bottom:8px"><table><thead><tr><th>Instrumento</th><th>¿Qué evalúa?</th><th>Criterios identificados</th></tr></thead><tbody>${ie.anexos.map(x => `<tr><td><b>${esc(x.tipo)}</b><span class="sub">${esc(x.titulo || "")}</span></td><td>${esc(x.evalua || x.titulo || "—")}</td><td>${(x.criterios || []).map(esc).join("<br>") || "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${ie && ie.menciones?.length ? `<details><summary class="muted" style="cursor:pointer;font-size:.85rem">Dónde se mencionan (${ie.menciones.length})</summary>${ie.menciones.map(m => `<p style="font-size:.82rem;margin:4px 0">${chip(m.tipo)} ${esc(m.contexto)}${m.alFinal ? " " + chip("al final del documento", "d") : ""}</p>`).join("")}</details>` : ""}
+      ${campo("instrumentos", "Resumen (editable)", true)}</div>
+    <div class="card flat" style="margin:0 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Transversalidad curricular</h3>${tv ? chip("Se enviará a PAEC", "b") : chip("No identificada")}</div>
+      ${tv ? (tv.filas?.length ? `<div class="tw"><table><thead><tr>${tv.headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tv.filas.map(f => `<tr>${f.celdas.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="pre">${esc(tv.texto || "")}</div>`)
+        : `<p class="muted" style="font-size:.85rem">No se encontró la tabla “Transversalidad curricular” en el documento.</p>`}
+      ${tv ? `<p class="faint" style="font-size:.75rem;margin-top:6px">Consulta todas las actividades transversales en <a href="#/paec?tab=transversalidad">Proyectos PAEC → Transversalidad planeada</a>.</p>` : ""}</div>
     ${p.texto ? `<details><summary class="muted" style="cursor:pointer">Ver texto extraído del documento</summary><div class="pre">${esc(p.texto.slice(0, 8000))}${p.texto.length > 8000 ? "\n…" : ""}</div></details>` : ""}
     ${vers.length > 1 ? `<h3 style="margin:12px 0 6px">Versiones</h3><div class="tl">${vers.map(v => `<div class="it">v${v.version || 1} · ${fdt(v.fechaCarga)} · ${esc(v.archivoNombre || v.enlace || "")} ${v.id === p.id ? chip("actual", "m") : ""}</div>`).join("")}</div>` : ""}`,
     onSubmit: edit ? async o => {
-      const d = { progresion: o.progresion, proposito: o.proposito, contenidos: o.contenidos, estrategias: o.estrategias, instrumentos: o.instrumentos };
+      // Solo se guarda como “corregido a mano” lo que difiere de lo tomado del documento
+      const d = {}; ["progresion", "proposito", "contenidos", "estrategias", "instrumentos"].forEach(k => { d[k] = (o[k] || "") === (ex[k] || "") ? "" : (o[k] || ""); });
       if (o.progresion && !p.bloomProgresion) { const an = BL().analizar(o.progresion); d.bloomProgresion = an.maxNivel || null; }
       if (isStaff()) {
         const a2 = A(o.asignacionId);
