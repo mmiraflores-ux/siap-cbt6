@@ -146,7 +146,8 @@ function startSubscriptions() {
   if (isAdmin()) { sub("usuarios"); sub("invitaciones"); sub("solicitudes"); if (!staff) sub("auditoria"); }
   if (S.store.mode === "local") ["usuarios"].forEach(c => S.d[c] = S.d[c] || []);
   S.ready = true;
-  if (S.user.personaId) S.user.nombre = pname(S.user.personaId);
+  // el catálogo de personas llega después (tiempo real); no fijar aquí un “no encontrada”
+  if (S.user.personaId) S.user.nombre = P(S.user.personaId)?.nombre || S.user.nombre || "";
   if (!S._routeBound) { window.addEventListener("hashchange", onRoute); S._routeBound = true; }
   onRoute();
 }
@@ -154,7 +155,7 @@ function startSubscriptions() {
 function scheduleRender() {
   clearTimeout(renderT);
   renderT = setTimeout(() => {
-    if (S.user && !S.user.nombre && S.user.personaId) S.user.nombre = P(S.user.personaId)?.nombre;
+    if (S.user && S.user.personaId) S.user.nombre = P(S.user.personaId)?.nombre || S.user.nombre || "";
     if (dirty || $("#ov")) { pendingRefresh = true; const r = $("#refresh"); if (r) r.hidden = false; return; }
     render();
   }, 60);
@@ -220,7 +221,7 @@ export function render() {
   root.innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="seal">CBT6</div><div><b>SIAP</b><span>Sistema Integral de Acompañamiento Pedagógico</span></div></div>
       <nav class="nav">${navHtml}</nav>
-      <div class="who"><b>${esc(S.user.nombre || S.user.email || "Usuario")}</b><small>${esc(rl || "Sin rol asignado")}</small><br>
+      <div class="who"><b>${esc(P(S.user.personaId)?.nombre || (S.user.nombre && !S.user.nombre.startsWith("(") ? S.user.nombre : "") || S.user.email || "Usuario")}</b>${S.user.personaId && !P(S.user.personaId) && S.ready && L("personas").length ? `<small style="color:var(--amb,#a15c00)">Cuenta sin persona del catálogo; Subdirección puede vincularla en Administración → Accesos.</small>` : ""}<small>${esc(rl || "Sin rol asignado")}</small><br>
       <button class="btn sm" data-act="logout" style="margin-top:8px">Cerrar sesión</button> <button class="btn sm ghost" data-act="tema" title="Cambiar tema">◐</button></div></aside>
     <div class="main"><header class="top"><button class="burger" data-act="menu" aria-label="Menú">☰</button>
       <div class="ttl"><h1>${esc(V.title ? (typeof V.title === "function" ? V.title(S.route) : V.title) : "")}</h1><small class="muted">${esc(CFG.institucion.nombre)} · Ciclo ${esc(CFG.institucion.cicloActual)} · Periodo ${esc(CFG.institucion.periodoActual)} · Parcial ${parcialHoy()}</small></div>
@@ -313,7 +314,7 @@ document.addEventListener("submit", e => {
 });
 window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 export const markClean = () => { dirty = false; };
-window.SIAP = { S, render, go };
+window.SIAP = { S, render, go, setQ };
 
 /* ======================= VISTA: PANEL ======================= */
 VIEWS.panel = {
