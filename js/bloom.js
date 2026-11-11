@@ -18,16 +18,17 @@
     const g = t === "ar" ? raiz + "ando" : raiz + "iendo";
     return [b, s, s + "n", g, b.replace(/r$/, "rá")].filter((x, i, a) => x.length > 3 && a.indexOf(x) === i);
   };
-  const MAPA = {};
-  NIVELES.forEach(L => L.verbos.forEach(v => formas(v).forEach(f => { (MAPA[f] = MAPA[f] || new Set()).add(L.n); })));
+  // Map (no objeto): palabras como “constructor” o “toString” no deben confundirse con propiedades internas
+  const MAPA = new Map();
+  NIVELES.forEach(L => L.verbos.forEach(v => formas(v).forEach(f => { if (!MAPA.has(f)) MAPA.set(f, new Set()); MAPA.get(f).add(L.n); })));
 
-  function nivelesDe(verbo) { const s = MAPA[norm(verbo).trim()]; return s ? [...s].sort() : []; }
+  function nivelesDe(verbo) { const s = MAPA.get(norm(verbo).trim()); return s ? [...s].sort() : []; }
 
   function analizar(texto) {
     const conteo = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }, verbos = {};
     const palabras = norm(texto).match(/[a-zñ]{4,}/g) || [];
     palabras.forEach(p => {
-      const s = MAPA[p]; if (!s) return;
+      const s = MAPA.get(p); if (!s) return;
       const nivel = Math.max(...s);           // ante ambigüedad se toma el nivel más alto posible
       conteo[nivel]++; verbos[p] = nivel;
     });
