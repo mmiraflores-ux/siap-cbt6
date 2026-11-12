@@ -88,7 +88,16 @@ export const errMsg = e => {
 };
 
 /* -------- datos e índices -------- */
-export const L = col => S.d[col] || [];
+/* Las observaciones eliminadas se conservan (con rastro de quién, cuándo y por qué) pero no se muestran
+   ni se cuentan en tableros o reportes. LTodo() las incluye para la consulta de eliminadas. */
+const _visibles = new WeakMap();
+export const L = col => {
+  const a = S.d[col] || [];
+  if (col !== "observaciones") return a;
+  let v = _visibles.get(a); if (!v) { v = a.filter(x => !x.eliminada); _visibles.set(a, v); }
+  return v;
+};
+export const LTodo = col => S.d[col] || [];
 export const byId = (col, id) => (S.ix[col] && S.ix[col][id]) || null;
 export function reindex(col) { S.ix[col] = {}; (S.d[col] || []).forEach(x => S.ix[col][x.id] = x); }
 export const P = id => byId("personas", id);
@@ -107,6 +116,8 @@ export const isStaff = () => hasRole("subdirectora") || hasRole("apoyo");
 export const isOri = () => hasRole("orientadora");
 export const canObserve = () => isStaff() || isOri();
 export const isAdmin = () => hasRole("admin");
+/* eliminar una observación: quien observa o el equipo de Subdirección; nunca la persona observada (espejo de firestore.rules) */
+export const puedeEliminarObs = o => !!o && !o.eliminada && !!me() && o.docenteId !== me() && (o.observadorId === me() || isStaff());
 export const isDoc = () => hasRole("docente");
 export const isVinc = () => hasRole("vinculadora");
 export const ROLES = {

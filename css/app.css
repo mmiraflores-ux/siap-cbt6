@@ -287,3 +287,20 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 .instr-img:empty{display:none}
 select.sm{padding:4px 6px;font-size:.82rem;max-width:220px}
 .g-card,.g-grid>*{min-width:0}.g-h .tabs{max-width:100%;overflow-x:auto}
+/* formato PAEC (como el documento institucional) */
+.fmt-paec .fmt-tit{background:#111;color:#fff;text-align:center;padding:8px;font-weight:600;border-radius:6px 6px 0 0}
+table.fmt th{background:#9b0f14;color:#fff;text-align:center;vertical-align:middle;border:1px solid #6d0a0e}
+table.fmt td{border:1px solid var(--line,#d9d6cf);vertical-align:top;font-size:.83rem}
+table.fmt td.cur{background:var(--soft,#eceae6);font-weight:600;text-align:center;vertical-align:middle;min-width:110px}
+table.fmt td.pr{min-width:180px;max-width:320px}
+table.fmt tr.sem td{background:var(--soft,#eceae6);text-align:center;font-weight:600}
+table.fmt hr{border:none;border-top:1px dashed var(--line,#ccc);margin:6px 0}
+.falta{color:#a15c00;font-weight:600;font-size:.8rem}
+@media (prefers-color-scheme:dark){.falta{color:#e8a33d}}
+.pend-doc{border:1px solid var(--line,#ddd);border-radius:8px;padding:8px 12px;margin-bottom:8px}
+.pend-doc summary{cursor:pointer;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pend-doc ul{margin:8px 0 2px;padding-left:18px;font-size:.86rem}
+.retro-item{margin-bottom:10px}.retro-form label{display:block;margin:8px 0;font-size:.86rem}.retro-form textarea{width:100%}
+@media print{.fmt-paec{break-inside:auto}table.fmt th{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+table.fmt th small{color:#fff;opacity:.9}
+.nowrap{white-space:nowrap}.elim-banner{border-left:4px solid var(--rojo);}

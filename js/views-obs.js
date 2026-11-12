@@ -1,7 +1,7 @@
 /* Observación, autorreflexión, diálogo reflexivo, acuerdos, seguimiento, Vo.Bo. e instrumentos */
 import {
   S, CFG, VIEWS, ACT, FORMS, esc, $, L, P, pname, UC, A, alabel, afull, opt, chip, chipEstado, modal, save, toast, isStaff, isSub, isDoc,
-  isOri, canObserve, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES
+  isOri, canObserve, puedeEliminarObs, LTodo, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES
 } from "./core.js";
 import { setQ, dropQ, go, listaObs } from "./app.js";
 import { formSesion, wireSesion, crearSesion, evidenciaInput, evidenciaHtml, guardarEvidencia, valorPlan, camposPlan } from "./views-plan.js";
@@ -15,10 +15,11 @@ const puedeEditarObs = o => o.docenteId !== me() && (o.observadorId === me() || 
 VIEWS.observaciones = {
   title: "Observaciones de clase",
   render(r) {
-    const q = r.q; let arr = L("observaciones").slice();
+    const q = r.q; const verElim = q.estado === "Eliminada";
+    let arr = (verElim ? LTodo("observaciones").filter(o => o.eliminada) : L("observaciones")).slice();
     if (!isStaff()) arr = arr.filter(o => o.observadorId === me() || o.docenteId === me());
     if (q.parcial) arr = arr.filter(o => o.parcial == q.parcial);
-    if (q.estado) arr = arr.filter(o => o.estado === q.estado);
+    if (q.estado && !verElim) arr = arr.filter(o => o.estado === q.estado);
     if (q.doc) arr = arr.filter(o => o.docenteId === q.doc);
     setTimeout(() => { if (q.nueva && canObserve() && !$("#ov")) { dropQ("nueva"); ACT.programarObs({ dataset: {} }); } }, 0);
     const docs = [...new Set(L("observaciones").map(o => o.docenteId))].map(P).filter(Boolean);
@@ -26,10 +27,53 @@ VIEWS.observaciones = {
       <div class="flow">${ESTADOS_OBS.map(e => `<span>${e}</span>`).join("")}</div>
       <p class="muted">Cada observación es independiente y se vincula a una sesión y su planeación. No existe máximo de observaciones; los antecedentes contextualizan pero no califican.</p>
       <div class="filters"><select data-filter="parcial"><option value="">Todos los parciales</option>${[1, 2, 3].map(n => opt(n, "Parcial " + n, q.parcial)).join("")}</select>
-      <select data-filter="estado"><option value="">Todos los estados</option>${[...ESTADOS_OBS, "Cancelada"].map(e => opt(e, e, q.estado)).join("")}</select>
+      <select data-filter="estado"><option value="">Todos los estados</option>${[...ESTADOS_OBS, "Cancelada"].map(e => opt(e, e, q.estado)).join("")}${opt("Eliminada", "Eliminadas (registro)", q.estado)}</select>
       ${isStaff() ? `<select data-filter="doc"><option value="">Todas las personas</option>${docs.map(p => opt(p.id, p.nombre, q.doc)).join("")}</select>` : ""}</div>
-      ${arr.length ? listaObs(arr) : `<div class="empty">No hay observaciones con estos filtros.</div>`}</div>`;
+      ${verElim ? listaEliminadas(arr) : arr.length ? listaObs(arr) : `<div class="empty">No hay observaciones con estos filtros.</div>`}</div>`;
   }
+};
+const ultElim = o => (o.eliminaciones || []).slice(-1)[0] || {};
+function listaEliminadas(arr) {
+  if (!arr.length) return `<div class="empty">No hay observaciones eliminadas con estos filtros.</div>`;
+  return `<p class="note">Las observaciones eliminadas no aparecen en tableros ni reportes, pero se conservan con el registro de quién las eliminó, cuándo y por qué.${isSub() ? " La Subdirección puede restaurarlas." : ""}</p>
+  <div class="tw"><table><thead><tr><th>Fecha</th><th>Asignación</th><th>Docente</th><th>Observa</th><th>Eliminó</th><th>Motivo</th><th></th></tr></thead><tbody>
+  ${arr.sort((a, b) => (ultElim(b).fecha || "").localeCompare(ultElim(a).fecha || "")).map(o => { const e = ultElim(o);
+    return `<tr><td>${fdate(o.fecha)}</td><td>${esc(alabel(o.asignacionId))}</td><td>${esc(pname(o.docenteId))}</td><td>${esc(pname(o.observadorId))}</td>
+    <td>${esc(e.nombre || pname(e.por))}<span class="sub">${fdt(e.fecha)} · estaba “${esc(e.estadoAnterior || "—")}”</span></td><td>${esc(e.motivo || "—")}</td>
+    <td class="num nowrap"><a class="btn sm" href="#/obs/${o.id}">Ver</a>${isSub() ? ` <button class="btn sm" data-act="restaurarObs" data-id="${o.id}">Restaurar</button>` : ""}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+
+/* -------- eliminar (con rastro) / restaurar -------- */
+ACT.eliminarObs = el => {
+  const ob = byId("observaciones", el.dataset.id);
+  if (!puedeEliminarObs(ob)) { toast("No tienes permiso para eliminar esta observación.", true); return; }
+  modal({ title: "Eliminar observación", submit: "Eliminar", body: `
+    <p class="note">Se eliminará la observación de <b>${esc(pname(ob.docenteId))}</b> · ${esc(alabel(ob.asignacionId))} · ${fdate(ob.fecha)} (estado: ${esc(ob.estado)}).</p>
+    <p class="muted" style="font-size:.85rem">Dejará de aparecer en las listas, el tablero y los reportes. Quedará un registro con tu nombre, la fecha y el motivo, consultable en <b>Observaciones → Eliminadas</b> y en Auditoría.</p>
+    <div class="f"><label>Motivo de la eliminación</label><textarea name="motivo" required minlength="10" placeholder="Ej.: Se programó por error en el grupo equivocado; se duplicó el registro…"></textarea></div>`,
+    onSubmit: async o => {
+      const motivo = (o.motivo || "").trim();
+      if (motivo.length < 10) { toast("Escribe el motivo (al menos 10 caracteres).", true); return false; }
+      const actual = byId("observaciones", ob.id) || ob;
+      const reg = { por: me(), nombre: pname(me()), fecha: nowISO(), motivo, estadoAnterior: actual.estado };
+      await save("observaciones", ob.id, { eliminada: true, eliminaciones: [...(actual.eliminaciones || []), reg] }, "eliminación de observación");
+      const txt = `${pname(me())} eliminó la observación de ${alabel(ob.asignacionId)} del ${fdate(ob.fecha)}. Motivo: ${short(motivo, 140)}`;
+      notify(ob.docenteId, "Observación", txt, "#/observaciones", ob.id + "elim" + reg.fecha);
+      notify(ob.observadorId, "Observación", txt, "#/observaciones?estado=Eliminada", ob.id + "elimo" + reg.fecha);
+      toast("Observación eliminada. El motivo quedó registrado.");
+      if (location.hash.startsWith("#/obs/")) setTimeout(() => go("/observaciones"), 150);
+    }
+  });
+};
+ACT.restaurarObs = el => {
+  if (!isSub()) return;
+  const ob = byId("observaciones", el.dataset.id);
+  modal({ title: "Restaurar observación", submit: "Restaurar", body: `<p class="muted">La observación volverá a las listas y reportes con el estado “${esc(ob.estado)}”. La eliminación previa se conserva en el historial.</p><div class="f"><label>Motivo de la restauración</label><textarea name="motivo" required></textarea></div>`,
+    onSubmit: async o => {
+      await save("observaciones", ob.id, { eliminada: false, restauraciones: [...(ob.restauraciones || []), { por: me(), nombre: pname(me()), fecha: nowISO(), motivo: o.motivo }] }, "restauración de observación");
+      toast("Observación restaurada.");
+    }
+  });
 };
 
 /* -------- programar -------- */
@@ -73,6 +117,12 @@ VIEWS.obs = {
     const o = byId("observaciones", r.id);
     if (!o) return `<div class="card empty">No se encontró la observación o no tienes acceso. <a href="#/observaciones">Volver</a></div>`;
     const soyDoc = o.docenteId === me(), soyObs = o.observadorId === me(), staff = isStaff();
+    if (o.eliminada) { const e = ultElim(o);
+      return `<div class="row" style="margin-bottom:10px"><a class="btn sm" href="#/observaciones?estado=Eliminada">← Eliminadas</a><span class="sp"></span>${isSub() ? `<button class="btn sm" data-act="restaurarObs" data-id="${o.id}">Restaurar</button>` : ""}</div>
+      <div class="card elim-banner"><div class="card-h"><h2>${esc(alabel(o.asignacionId))} · ${fdate(o.fecha)}</h2>${chip("Eliminada", "r")}</div>
+      <p>Docente: <b>${esc(pname(o.docenteId))}</b> · Observa: <b>${esc(pname(o.observadorId))}</b></p>
+      <h3 style="margin:10px 0 6px">Historial de eliminación</h3><div class="tl">${(o.eliminaciones || []).map(x => `<div class="it">${fdt(x.fecha)} · <b>Eliminó ${esc(x.nombre || pname(x.por))}</b> (estado “${esc(x.estadoAnterior || "—")}”): ${esc(x.motivo)}</div>`).join("")}
+      ${(o.restauraciones || []).map(x => `<div class="it">${fdt(x.fecha)} · Restauró ${esc(x.nombre || pname(x.por))}: ${esc(x.motivo || "")}</div>`).join("")}</div></div>`; }
     /* El registro detallado se lee documento por documento (no por suscripción) para que las reglas
        de seguridad oculten la valoración al docente observado hasta que envíe su autorreflexión. */
     const verDet = soyDoc ? (o.autorreflexionCompleta && o.detalleBloqueado) : (staff || soyObs);
@@ -95,7 +145,7 @@ VIEWS.obs = {
     const acs = L("acuerdos").filter(a => a.observacionId === o.id);
     let h = `<div class="row" style="margin-bottom:10px"><a class="btn sm" href="#/observaciones">← Observaciones</a><span class="sp"></span>
       ${(staff || soyObs) && o.estado === "Programada" ? `<button class="btn sm warn" data-act="cancelarObs" data-id="${o.id}">Cancelar</button>` : ""}
-      ${isSub() && o.detalleBloqueado ? `<button class="btn sm" data-act="reabrirObs" data-id="${o.id}">Reabrir (autorizado)</button>` : ""}<button class="btn sm" onclick="window.print()">Imprimir / PDF</button></div>
+      ${isSub() && o.detalleBloqueado ? `<button class="btn sm" data-act="reabrirObs" data-id="${o.id}">Reabrir (autorizado)</button>` : ""}${puedeEliminarObs(o) ? `<button class="btn sm warn" data-act="eliminarObs" data-id="${o.id}">Eliminar</button>` : ""}<button class="btn sm" onclick="window.print()">Imprimir / PDF</button></div>
     <div class="card"><div class="print-h"><b>${esc(CFG.institucion.nombre)}</b> · Registro de acompañamiento</div>
       <div class="card-h"><h2>${esc(alabel(o.asignacionId))} · ${fdate(o.fecha)}</h2>${chipEstado(o.estado)}</div>${flow}
       <div class="grid g4" style="font-size:.86rem"><div><small class="muted">Docente</small><br><b>${esc(pname(o.docenteId))}</b></div><div><small class="muted">Observa</small><br><b>${esc(pname(o.observadorId))}</b></div>

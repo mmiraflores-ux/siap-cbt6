@@ -2,7 +2,7 @@
 import { createStore, COLS_CATALOGO, COLS_PROCESO } from "./store.js";
 import {
   S, CFG, SEED, VIEWS, ACT, FORMS, esc, $, $$, toast, modal, closeModal, errMsg, L, reindex, P, pname, roles, me, isStaff, isOri,
-  isAdmin, isDoc, isSub, isVinc, canObserve, ROLES, alertas, today, fdate, fdt, chip, chipEstado, alabel, parcialHoy, periodoActual,
+  isAdmin, isDoc, isSub, isVinc, canObserve, puedeEliminarObs, ROLES, alertas, today, fdate, fdt, chip, chipEstado, alabel, parcialHoy, periodoActual,
   opt, save, audit, nowISO, newId, short, norm
 } from "./core.js";
 import "./views-academico.js";
@@ -341,7 +341,7 @@ function panelOri() {
 }
 export function listaObs(arr) {
   return `<div class="tw"><table><thead><tr><th>Fecha</th><th>Asignación</th><th>Docente</th><th>Observa</th><th>Estado</th><th></th></tr></thead><tbody>
-  ${arr.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map(o => `<tr><td>${fdate(o.fecha)}</td><td>${esc(alabel(o.asignacionId))}</td><td>${esc(pname(o.docenteId))}</td><td>${esc(pname(o.observadorId))}</td><td>${chipEstado(o.estado)}</td><td class="num"><a class="btn sm" href="#/obs/${o.id}">Abrir</a></td></tr>`).join("")}</tbody></table></div>`;
+  ${arr.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map(o => `<tr><td>${fdate(o.fecha)}</td><td>${esc(alabel(o.asignacionId))}</td><td>${esc(pname(o.docenteId))}</td><td>${esc(pname(o.observadorId))}</td><td>${chipEstado(o.estado)}</td><td class="num nowrap"><a class="btn sm" href="#/obs/${o.id}">Abrir</a>${puedeEliminarObs(o) ? ` <button class="btn sm warn" data-act="eliminarObs" data-id="${o.id}" title="Eliminar con motivo (queda registro)">Eliminar</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
 }
 function panelDocente() {
   const pid = me(); const mis = L("asignaciones").filter(a => a.docenteId === pid);
