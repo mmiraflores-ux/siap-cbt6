@@ -2,13 +2,14 @@
 import { createStore, COLS_CATALOGO, COLS_PROCESO } from "./store.js";
 import {
   S, CFG, SEED, VIEWS, ACT, FORMS, esc, $, $$, toast, modal, closeModal, errMsg, L, reindex, P, pname, roles, me, isStaff, isOri,
-  isAdmin, isDoc, isSub, isVinc, canObserve, puedeEliminarObs, ROLES, alertas, today, fdate, fdt, chip, chipEstado, alabel, parcialHoy, periodoActual,
+  isAdmin, isDoc, isSub, isVinc, canObserve, puedeEliminarObs, gradosOri, ROLES, alertas, today, fdate, fdt, chip, chipEstado, alabel, parcialHoy, periodoActual,
   opt, save, audit, nowISO, newId, short, norm
 } from "./core.js";
 import "./views-academico.js";
 import "./views-plan.js";
 import "./views-obs.js";
 import "./views-gestion.js";
+import "./views-criterios.js";
 import { panelStaff } from "./tablero.js";
 import "./graficas.js";
 
@@ -193,6 +194,7 @@ const NAV = [
   { v: "sesiones", ico: "◷", t: "Sesiones y concreción", show: () => isStaff() || isDoc() || isOri() },
   { v: "observaciones", ico: "◉", t: "Observaciones", show: () => canObserve() || isDoc() },
   { v: "acuerdos", ico: "✓", t: "Acuerdos y seguimiento", show: () => canObserve() || isDoc() },
+  { v: "criterios", ico: "✎", t: "Criterios de evaluación", show: () => isStaff() || isOri() },
   { v: "paec", ico: "⬡", t: "Proyectos PAEC", show: () => true },
   { g: "Gestión académica" },
   { v: "estructura", ico: "▦", t: "Estructura académica", show: () => true },
@@ -336,7 +338,9 @@ VIEWS.panel = {
 
 function panelOri() {
   const mine = L("observaciones").filter(o => o.observadorId === me());
-  return `<div class="card"><div class="card-h"><h2>Mis observaciones como orientadora</h2><a class="btn pri" href="#/observaciones?nueva=1">Programar observación</a></div>
+  const gs = gradosOri();
+  return (gs.length ? `<div class="card"><div class="card-h"><h2>Criterios de evaluación · ${gs.map(g => g + "°").join(", ")} grado</h2><a class="btn" href="#/criterios">Consultar</a></div><p class="muted" style="margin:0">Productos, aspectos, instrumentos y ponderaciones que cada docente evaluará en el parcial ${parcialHoy()}, por grupo y docente.</p></div>` : "")
+  + `<div class="card"><div class="card-h"><h2>Mis observaciones como orientadora</h2><a class="btn pri" href="#/observaciones?nueva=1">Programar observación</a></div>
   ${mine.length ? listaObs(mine) : `<div class="empty">Aún no registras observaciones.</div>`}</div>`;
 }
 export function listaObs(arr) {

@@ -103,9 +103,17 @@ export function reindex(col) { S.ix[col] = {}; (S.d[col] || []).forEach(x => S.i
 export const P = id => byId("personas", id);
 export const pname = id => P(id)?.nombre || (id ? "(persona no encontrada)" : "—");
 export const UC = id => byId("unidades", id);
-export const A = id => byId("asignaciones", id);
-export const alabel = (a) => { if (typeof a === "string") a = A(a); if (!a) return "—"; const u = UC(a.unidadId); return `${u?.abrev || "?"} · ${a.grupo}`; };
-export const afull = (a) => { if (typeof a === "string") a = A(a); if (!a) return "—"; const u = UC(a.unidadId); return u?.nombre || a.nombreFuente; };
+/* Actividades operativas del horario (tutoría, talleres) que se observan sin ser UAC curricular:
+   se identifican con un id virtual "op~actividadId~grupo~docenteId" y se resuelven al vuelo. */
+export const opId = (actividadId, grupo, docenteId) => `op~${actividadId}~${grupo}~${docenteId}`;
+function asgOperativa(id) {
+  const [, actividadId, grupo, docenteId] = String(id).split("~");
+  const act = byId("actividades", actividadId);
+  return { id, operativa: true, actividadId, grupo, docenteId, unidadId: "", nombreFuente: act?.nombre || actividadId, abrev: act?.nombre || act?.alias?.[0] || "Actividad" };
+}
+export const A = id => byId("asignaciones", id) || (typeof id === "string" && id.startsWith("op~") ? asgOperativa(id) : null);
+export const alabel = (a) => { if (typeof a === "string") a = A(a); if (!a) return "—"; const u = UC(a.unidadId); return `${u?.abrev || a.abrev || "?"} · ${a.grupo}`; };
+export const afull = (a) => { if (typeof a === "string") a = A(a); if (!a) return "—"; const u = UC(a.unidadId); return u?.nombre || (a.operativa ? `${a.nombreFuente} (actividad operativa)` : a.nombreFuente); };
 
 /* -------- sesión y permisos (espejo de firestore.rules) -------- */
 export const roles = () => S.user?.roles || [];
@@ -115,6 +123,11 @@ export const isSub = () => hasRole("subdirectora");
 export const isStaff = () => hasRole("subdirectora") || hasRole("apoyo");
 export const isOri = () => hasRole("orientadora");
 export const canObserve = () => isStaff() || isOri();
+/* Grado(s) que atiende cada orientadora. Se toma de su ficha (Estructura → Personas, “Grado(s) que orienta”);
+   si no está capturado, se usa la asignación indicada por Subdirección (nov-2026). */
+const ORIENTACION_DEF = { "p-viviana-ruiz-rebollar": [1], "p-salma-sofia-kareh-mireles": [2], "p-arlaet-mendez-gomora": [3] };
+export const gradosOri = (pid = me()) => { const g = P(pid)?.gradosOrientacion; return (Array.isArray(g) && g.length ? g : ORIENTACION_DEF[pid] || []).map(Number); };
+export const gradoDeGrupo = g => { const x = byId("grupos", g); return x?.grado ? +x.grado : Math.ceil((+String(g)[0] || 0) / 2); };
 export const isAdmin = () => hasRole("admin");
 /* eliminar una observación: quien observa o el equipo de Subdirección; nunca la persona observada (espejo de firestore.rules) */
 export const puedeEliminarObs = o => !!o && !o.eliminada && !!me() && o.docenteId !== me() && (o.observadorId === me() || isStaff());

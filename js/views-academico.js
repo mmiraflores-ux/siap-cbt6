@@ -1,7 +1,7 @@
 /* Estructura académica (catálogos versionados) y horarios */
 import {
   S, VIEWS, ACT, esc, L, P, pname, UC, A, alabel, afull, opt, chip, chipEstado, modal, save, toast, isStaff, isSub, me, norm,
-  periodoActual, fdate, today, nowISO, BLOQUES, DIAS, conflictosHorario, horarioPersona, short, audit, newId, isDoc
+  periodoActual, fdate, today, nowISO, BLOQUES, DIAS, conflictosHorario, horarioPersona, short, audit, newId, isDoc, gradosOri
 } from "./core.js";
 import { setQ } from "./app.js";
 
@@ -143,11 +143,13 @@ ACT.editPersona = el => {
     <div class="f"><label>Nombre completo</label><input type="text" name="nombre" value="${esc(p.nombre)}" required></div>
     <div class="grid g2"><div class="f"><label>Tipo</label><select name="nomenclatura">${[["DFG", "Docente frente a grupo"], ["DTC", "Docente tiempo completo"], ["ORI", "Orientadora"], ["DIR", "Directivo"]].map(([k, v]) => opt(k, v, p.nomenclatura)).join("")}</select></div>
     <div class="f"><label>Funciones (separadas por coma)</label><input type="text" name="funciones" value="${esc((p.funciones || []).join(", "))}"></div></div>
+    <div class="f"><label>Grado(s) que orienta <span class="faint">(solo orientadoras; ej. 1 o 1, 2)</span></label><input type="text" name="gradosOrientacion" value="${esc((p.id ? gradosOri(p.id) : []).join(", "))}" placeholder="Vacío si no es orientadora"></div>
     <div class="f"><label>Alias para archivos y horarios (separados por coma)</label><input type="text" name="alias" value="${esc((p.alias || []).join(", "))}"><span class="hint">Ej. SANDIVEL, SANDY</span></div>
     ${p.revisar ? `<label class="checks"><label><input type="checkbox" name="confirmado"> Datos confirmados (quitar aviso de revisión)</label></label>` : ""}`,
     onSubmit: async o => {
       const id = p.id || "p-" + norm(o.nombre).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
-      const d = { nombre: o.nombre, nombreN: norm(o.nombre), nomenclatura: o.nomenclatura, funciones: o.funciones.split(",").map(x => x.trim()).filter(Boolean), alias: o.alias.split(",").map(x => norm(x)).filter(Boolean), activo: true };
+      const d = { nombre: o.nombre, nombreN: norm(o.nombre), nomenclatura: o.nomenclatura, funciones: o.funciones.split(",").map(x => x.trim()).filter(Boolean), alias: o.alias.split(",").map(x => norm(x)).filter(Boolean), activo: true,
+        gradosOrientacion: String(o.gradosOrientacion || "").split(/[,\s]+/).map(Number).filter(n => n >= 1 && n <= 3) };
       if (!p.id) d.roles = ["docente"];
       if (o.confirmado) d.revisar = "";
       await save("personas", id, d); toast("Persona guardada.");
