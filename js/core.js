@@ -123,6 +123,10 @@ export const isSub = () => hasRole("subdirectora");
 export const isStaff = () => hasRole("subdirectora") || hasRole("apoyo");
 export const isOri = () => hasRole("orientadora");
 export const canObserve = () => isStaff() || isOri();
+/* Orientación sin otro rol pedagógico: registra las observaciones que Subdirección le programa y consulta criterios de evaluación */
+export const soloOri = () => isOri() && !isStaff() && !isDoc();
+/* Programar observaciones es exclusivo del equipo de Subdirección (subdirectora y apoyo) */
+export const puedeProgramarObs = () => isStaff();
 /* Grado(s) que atiende cada orientadora. Se toma de su ficha (Estructura → Personas, “Grado(s) que orienta”);
    si no está capturado, se usa la asignación indicada por Subdirección (nov-2026). */
 const ORIENTACION_DEF = { "p-viviana-ruiz-rebollar": [1], "p-salma-sofia-kareh-mireles": [2], "p-arlaet-mendez-gomora": [3] };

@@ -2,7 +2,7 @@
 import { createStore, COLS_CATALOGO, COLS_PROCESO } from "./store.js";
 import {
   S, CFG, SEED, VIEWS, ACT, FORMS, esc, $, $$, toast, modal, closeModal, errMsg, L, reindex, P, pname, roles, me, isStaff, isOri,
-  isAdmin, isDoc, isSub, isVinc, canObserve, puedeEliminarObs, gradosOri, ROLES, alertas, today, fdate, fdt, chip, chipEstado, alabel, parcialHoy, periodoActual,
+  isAdmin, isDoc, isSub, isVinc, canObserve, puedeEliminarObs, gradosOri, soloOri, ROLES, alertas, today, fdate, fdt, chip, chipEstado, alabel, parcialHoy, periodoActual,
   opt, save, audit, nowISO, newId, short, norm
 } from "./core.js";
 import "./views-academico.js";
@@ -190,16 +190,16 @@ const NAV = [
   { v: "panel", ico: "◧", t: "Panel", show: () => true },
   { v: "notificaciones", ico: "✉", t: "Notificaciones", show: () => !!me(), cnt: () => L("notificaciones").filter(n => !n.leida).length },
   { g: "Acompañamiento" },
-  { v: "planeaciones", ico: "▤", t: "Planeaciones", show: () => isStaff() || isDoc() || isOri() },
-  { v: "sesiones", ico: "◷", t: "Sesiones y concreción", show: () => isStaff() || isDoc() || isOri() },
+  { v: "planeaciones", ico: "▤", t: "Planeaciones", show: () => isStaff() || isDoc() },
+  { v: "sesiones", ico: "◷", t: "Sesiones y concreción", show: () => isStaff() || isDoc() },
   { v: "observaciones", ico: "◉", t: "Observaciones", show: () => canObserve() || isDoc() },
-  { v: "acuerdos", ico: "✓", t: "Acuerdos y seguimiento", show: () => canObserve() || isDoc() },
+  { v: "acuerdos", ico: "✓", t: "Acuerdos y seguimiento", show: () => (canObserve() || isDoc()) && !soloOri() },
   { v: "criterios", ico: "✎", t: "Criterios de evaluación", show: () => isStaff() || isOri() },
-  { v: "paec", ico: "⬡", t: "Proyectos PAEC", show: () => true },
+  { v: "paec", ico: "⬡", t: "Proyectos PAEC", show: () => !soloOri() },
   { g: "Gestión académica" },
-  { v: "estructura", ico: "▦", t: "Estructura académica", show: () => true },
-  { v: "horarios", ico: "▥", t: "Horarios", show: () => true },
-  { v: "instrumentos", ico: "☰", t: "Instrumentos", show: () => canObserve() || isDoc() },
+  { v: "estructura", ico: "▦", t: "Estructura académica", show: () => !soloOri() },
+  { v: "horarios", ico: "▥", t: "Horarios", show: () => !soloOri() },
+  { v: "instrumentos", ico: "☰", t: "Instrumentos", show: () => (canObserve() || isDoc()) && !soloOri() },
   { v: "reportes", ico: "▧", t: "Reportes", show: () => isStaff() || isSub() || roles().includes("directivo") },
   { g: "Sistema" },
   { v: "auditoria", ico: "⌘", t: "Auditoría", show: () => isStaff() || isAdmin() },
@@ -213,7 +213,9 @@ export function render() {
   pendingRefresh = false;
   const V = VIEWS[S.route.view] || VIEWS.panel;
   let body = "";
-  try { body = V.render(S.route); } catch (e) { console.error(e); body = `<div class="note err">Error al mostrar esta sección: ${esc(e.message)}</div>`; }
+  const enNav = NAV.find(n => n.v === S.route.view);
+  if (enNav && !enNav.show()) body = `<div class="card"><h2>Sección no disponible</h2><p class="muted">Tu rol no tiene acceso a “${esc(enNav.t)}”. <a href="#/panel">Volver al panel</a></p></div>`;
+  else try { body = V.render(S.route); } catch (e) { console.error(e); body = `<div class="note err">Error al mostrar esta sección: ${esc(e.message)}</div>`; }
   const items = NAV.filter(n => n.g || n.show());
   const navHtml = items.map((n, i) => n.g ? ((items[i + 1] && !items[i + 1].g) ? `<div class="grp">${n.g}</div>` : "") :
     `<a href="#/${n.v}" class="${S.route.view === n.v ? "on" : ""}"><span class="ico">${n.ico}</span>${n.t}${n.cnt && n.cnt() ? `<span class="cnt">${n.cnt()}</span>` : ""}</a>`).join("");
@@ -322,7 +324,7 @@ window.SIAP = { S, render, go, setQ };
 VIEWS.panel = {
   title: "Panel de control",
   render() {
-    const al = alertas();
+    const al = soloOri() ? alertas().filter(a => /^#\/(obs\b|observaciones|criterios|notificaciones)/.test(a.link || "")) : alertas();
     const alHtml = al.length ? `<div class="tw"><table><tbody>${al.slice(0, 12).map(a => `<tr><td style="width:120px">${chip(a.cat, a.lvl)}</td><td>${esc(a.txt)}</td><td class="num"><a class="btn sm" href="${a.link}">Atender</a></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">Sin pendientes por ahora.</div>`;
     let html = "";
     if (isStaff()) html += panelStaff();
@@ -340,8 +342,9 @@ function panelOri() {
   const mine = L("observaciones").filter(o => o.observadorId === me());
   const gs = gradosOri();
   return (gs.length ? `<div class="card"><div class="card-h"><h2>Criterios de evaluación · ${gs.map(g => g + "°").join(", ")} grado</h2><a class="btn" href="#/criterios">Consultar</a></div><p class="muted" style="margin:0">Productos, aspectos, instrumentos y ponderaciones que cada docente evaluará en el parcial ${parcialHoy()}, por grupo y docente.</p></div>` : "")
-  + `<div class="card"><div class="card-h"><h2>Mis observaciones como orientadora</h2><a class="btn pri" href="#/observaciones?nueva=1">Programar observación</a></div>
-  ${mine.length ? listaObs(mine) : `<div class="empty">Aún no registras observaciones.</div>`}</div>`;
+  + `<div class="card"><div class="card-h"><h2>Mis observaciones como orientadora</h2><a class="btn" href="#/observaciones">Ver todas</a></div>
+  <p class="muted">La Subdirección programa las observaciones; aquí aparecen las que te asigna para registrarlas.</p>
+  ${mine.length ? listaObs(mine) : `<div class="empty">Aún no tienes observaciones asignadas.</div>`}</div>`;
 }
 export function listaObs(arr) {
   return `<div class="tw"><table><thead><tr><th>Fecha</th><th>Asignación</th><th>Docente</th><th>Observa</th><th>Estado</th><th></th></tr></thead><tbody>
@@ -370,7 +373,7 @@ VIEWS.notificaciones = {
   title: "Bandeja de notificaciones",
   render() {
     const ns = L("notificaciones").slice().sort((a, b) => b.ts.localeCompare(a.ts));
-    const al = alertas();
+    const al = soloOri() ? alertas().filter(a => /^#\/(obs\b|observaciones|criterios|notificaciones)/.test(a.link || "")) : alertas();
     return `<div class="card"><div class="card-h"><h2>Avisos</h2><button class="btn sm" data-act="leerTodas">Marcar todo como leído</button></div>
       ${ns.length ? ns.map(n => `<div class="notif ${n.leida ? "read" : "unread"}"><div class="dot"></div><div style="flex:1"><b>${esc(n.texto)}</b><br><small>${fdt(n.ts)} · ${esc(n.tipo)} ${n.deId ? "· de " + esc(pname(n.deId)) : ""}</small></div>
       <button class="btn sm" data-act="leerNotif" data-id="${n.id}" data-link="${esc(n.link || "")}">${n.link ? "Abrir" : "Leído"}</button></div>`).join("") : `<div class="empty">No tienes avisos.</div>`}</div>

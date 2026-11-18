@@ -1,11 +1,12 @@
 /* Planeaciones (carga individual y masiva), sesiones, concreción áulica y evidencias */
 import {
   S, CFG, VIEWS, ACT, esc, $, $$, L, P, pname, UC, A, alabel, afull, opt, chip, chipEstado, modal, closeModal, save, toast, isStaff, isDoc,
-  isOri, canObserve, me, norm, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, BLOQUES, DIAS, byId
+  isOri, canObserve, puedeProgramarObs, me, norm, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, BLOQUES, DIAS, byId
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
 import { analizarPlaneacion, combinar, cerrarLectorImagenes, imagenInstrumento } from "./extractor.js";
 import { listaPendientes, pendientes } from "./tablero.js";
+import { retroSubdireccion } from "./paec-formato.js";
 
 const BL = () => window.BLOOM;
 const TIPOS_INSTR = ["Rúbrica", "Lista de cotejo", "Lista de observación", "Guía de observación", "Escala estimativa o de valoración", "Registro anecdótico", "Diario o bitácora", "Portafolio de evidencias", "Cuestionario o examen", "Instrumento con criterios", "Instrumento en texto", "Instrumento en imagen", "No es instrumento"];
@@ -153,7 +154,7 @@ VIEWS.planeaciones = {
     const nPend = Object.values(pendientes(pa, { ...mis, grupo: q.grupo || "" })).reduce((a, x) => a + x.length, 0);
     const conImg = L("planeaciones").filter(p => p.estado !== "Sustituida" && p.archivoId && p.instrumentosEval?.pendientesOcr && (isStaff() || p.docenteId === me()));
     setTimeout(() => { if (q.pend) document.getElementById("pendientesPl")?.setAttribute("open", ""); }, 0);
-    return `<details class="card" id="pendientesPl" ${q.pend ? "open" : ""}><summary style="cursor:pointer;list-style:none"><div class="card-h" style="margin:0"><h2>Materias sin planeación en el sistema · parcial ${pa}</h2>${nPend ? chip(nPend + " pendientes", "a") : chip("Completo", "g")}<small class="muted">Clic para ${q.pend ? "ocultar" : "ver la lista"}</small></div></summary>
+    return `${me() ? retroSubdireccion(me()) : ""}<details class="card" id="pendientesPl" ${q.pend ? "open" : ""}><summary style="cursor:pointer;list-style:none"><div class="card-h" style="margin:0"><h2>Materias sin planeación en el sistema · parcial ${pa}</h2>${nPend ? chip(nPend + " pendientes", "a") : chip("Completo", "g")}<small class="muted">Clic para ${q.pend ? "ocultar" : "ver la lista"}</small></div></summary>
       <div style="margin-top:12px">${q.parcial ? "" : `<p class="faint" style="font-size:.8rem">Se muestra el parcial actual; elige otro en el filtro de abajo.</p>`}${listaPendientes(pa, { ...mis, grupo: q.grupo || "" })}</div></details>
     ${conImg.length ? `<div class="note info no-print">${conImg.length} planeación(es) tienen instrumentos en imagen sin leer. <button class="btn sm" data-act="leerImagenesPend">Leer instrumentos en imagen</button> <small class="muted">Usa reconocimiento de texto; tarda unos segundos por imagen.</small></div>` : ""}
     <div class="card"><div class="card-h"><h2>Planeaciones · ${arr.length}</h2>
@@ -376,7 +377,9 @@ ACT.verPlan = el => {
     <div class="card flat" style="margin:0 0 12px"><div class="card-h" style="margin-bottom:6px"><h3>Transversalidad curricular</h3>${tv ? chip("Se enviará a PAEC", "b") : chip("No identificada")}</div>
       ${tv ? (tv.filas?.length ? `<div class="tw"><table><thead><tr>${tv.headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tv.filas.map(f => `<tr>${f.celdas.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="pre">${esc(tv.texto || "")}</div>`)
         : `<p class="muted" style="font-size:.85rem">No se encontró la tabla “Transversalidad curricular” en el documento.</p>`}
-      ${tv ? `<p class="faint" style="font-size:.75rem;margin-top:6px">Consulta todas las actividades transversales en <a href="#/paec?tab=transversalidad">Proyectos PAEC → Transversalidad planeada</a>.</p>` : ""}</div>
+      ${tv ? `<p class="faint" style="font-size:.75rem;margin-top:6px">Consulta todas las actividades transversales en <a href="#/paec?tab=transversalidad">Proyectos PAEC → Transversalidad planeada</a> y en el <a href="#/paec?tab=formato">Formato PAEC 2026-2027</a>.</p>` : ""}</div>
+    ${retroSubdireccion("", { asgId: p.asignacionId })}
+    ${isStaff() && p.docenteId ? `<div class="row no-print" style="margin:0 0 12px"><button type="button" class="btn sm" data-act="retroPlan" data-id="${p.id}">✎ Retroalimentación de Subdirección al docente</button></div>` : ""}
     ${p.texto ? `<details><summary class="muted" style="cursor:pointer">Ver texto extraído del documento</summary><div class="pre">${esc(p.texto.slice(0, 8000))}${p.texto.length > 8000 ? "\n…" : ""}</div></details>` : ""}
     ${vers.length > 1 ? `<h3 style="margin:12px 0 6px">Versiones</h3><div class="tl">${vers.map(v => `<div class="it">v${v.version || 1} · ${fdt(v.fechaCarga)} · ${esc(v.archivoNombre || v.enlace || "")} ${v.id === p.id ? chip("actual", "m") : ""}</div>`).join("")}</div>` : ""}`,
     onSubmit: edit ? async o => {
@@ -415,7 +418,7 @@ VIEWS.sesiones = {
         <td><select data-chg="estadoSesion" data-id="${s.id}" style="width:auto;padding:3px 6px;font-size:.78rem" ${isStaff() || s.docenteId === me() ? "" : "disabled"}>${["Programada", "Realizada", "Reprogramada", "Cancelada"].map(e => opt(e, e, s.estado)).join("")}</select></td>
         <td>${c ? chip(c.relacion?.[0] || "Registrada", "g") : `<span class="faint">—</span>`}</td>
         <td>${ob.length ? ob.map(o => `<a href="#/obs/${o.id}">${chipEstado(o.estado)}</a>`).join(" ") : `<span class="faint">—</span>`}</td>
-        <td class="num"><button class="btn sm" data-act="concrecion" data-id="${s.id}">Concreción</button>${canObserve() && s.docenteId !== me() ? ` <button class="btn sm" data-act="programarObs" data-sesion="${s.id}">Observar</button>` : ""}</td></tr>`; }).join("") || `<tr><td colspan="8" class="empty">Aún no hay sesiones registradas.</td></tr>`}
+        <td class="num"><button class="btn sm" data-act="concrecion" data-id="${s.id}">Concreción</button>${puedeProgramarObs() && s.docenteId !== me() ? ` <button class="btn sm" data-act="programarObs" data-sesion="${s.id}">Observar</button>` : ""}</td></tr>`; }).join("") || `<tr><td colspan="8" class="empty">Aún no hay sesiones registradas.</td></tr>`}
       </tbody></table></div></div>`;
   }
 };
@@ -441,7 +444,7 @@ export function wireSesion(f, pre = {}) {
 export async function crearSesion(o) {
   const a = A(o.asignacionId); const pl = byId("planeaciones", o.planeacionId);
   const id = newId("se-");
-  await save("sesiones", id, { asignacionId: a.id, docenteId: a.docenteId, grupo: a.grupo, unidadId: a.unidadId, fecha: o.fecha, parcial: parcialDe(o.fecha), bloques: (o.bloques || []).map(Number),
+  await save("sesiones", id, { asignacionId: a.id, docenteId: a.docenteId, grupo: a.grupo, unidadId: a.unidadId || "", actividadId: a.actividadId || "", fecha: o.fecha, parcial: parcialDe(o.fecha), bloques: (o.bloques || []).map(Number),
     planeacionId: o.planeacionId || "", planeacionVersion: pl?.version || null, estado: o.fecha > today() ? "Programada" : "Realizada", ciclo: CFG.institucion.cicloActual, periodo: CFG.institucion.periodoActual }, "alta de sesión");
   return id;
 }

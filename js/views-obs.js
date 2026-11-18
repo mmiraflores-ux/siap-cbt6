@@ -1,9 +1,10 @@
 /* Observación, autorreflexión, diálogo reflexivo, acuerdos, seguimiento, Vo.Bo. e instrumentos */
 import {
   S, CFG, VIEWS, ACT, FORMS, esc, $, L, P, pname, UC, A, alabel, afull, opt, chip, chipEstado, modal, save, toast, isStaff, isSub, isDoc,
-  isOri, canObserve, puedeEliminarObs, LTodo, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES
+  isOri, canObserve, puedeProgramarObs, puedeEliminarObs, LTodo, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES
 } from "./core.js";
 import { setQ, dropQ, go, listaObs } from "./app.js";
+import { vistaCronograma } from "./views-crono.js";
 import { formSesion, wireSesion, crearSesion, evidenciaInput, evidenciaHtml, guardarEvidencia, valorPlan, camposPlan } from "./views-plan.js";
 
 const BL = () => window.BLOOM;
@@ -15,15 +16,18 @@ const puedeEditarObs = o => o.docenteId !== me() && (o.observadorId === me() || 
 VIEWS.observaciones = {
   title: "Observaciones de clase",
   render(r) {
-    const q = r.q; const verElim = q.estado === "Eliminada";
+    const q = r.q;
+    const tabs = `<div class="tabs" style="margin-bottom:12px"><button class="${q.tab !== "crono" ? "on" : ""}" onclick="SIAP.go('/observaciones')">Registro de observaciones</button><button class="${q.tab === "crono" ? "on" : ""}" onclick="SIAP.go('/observaciones?tab=crono')">Programación (cronograma)</button></div>`;
+    if (q.tab === "crono") return tabs + vistaCronograma(q);
+    const verElim = q.estado === "Eliminada";
     let arr = (verElim ? LTodo("observaciones").filter(o => o.eliminada) : L("observaciones")).slice();
     if (!isStaff()) arr = arr.filter(o => o.observadorId === me() || o.docenteId === me());
     if (q.parcial) arr = arr.filter(o => o.parcial == q.parcial);
     if (q.estado && !verElim) arr = arr.filter(o => o.estado === q.estado);
     if (q.doc) arr = arr.filter(o => o.docenteId === q.doc);
-    setTimeout(() => { if (q.nueva && canObserve() && !$("#ov")) { dropQ("nueva"); ACT.programarObs({ dataset: {} }); } }, 0);
+    setTimeout(() => { if (q.nueva && puedeProgramarObs() && !$("#ov")) { dropQ("nueva"); ACT.programarObs({ dataset: {} }); } }, 0);
     const docs = [...new Set(L("observaciones").map(o => o.docenteId))].map(P).filter(Boolean);
-    return `<div class="card"><div class="card-h"><h2>Observaciones · ${arr.length}</h2>${canObserve() ? `<button class="btn pri" data-act="programarObs">+ Programar observación</button>` : ""}</div>
+    return tabs + `<div class="card"><div class="card-h"><h2>Observaciones · ${arr.length}</h2>${puedeProgramarObs() ? `<button class="btn pri" data-act="programarObs">+ Programar observación</button>` : ""}</div>
       <div class="flow">${ESTADOS_OBS.map(e => `<span>${e}</span>`).join("")}</div>
       <p class="muted">Cada observación es independiente y se vincula a una sesión y su planeación. No existe máximo de observaciones; los antecedentes contextualizan pero no califican.</p>
       <div class="filters"><select data-filter="parcial"><option value="">Todos los parciales</option>${[1, 2, 3].map(n => opt(n, "Parcial " + n, q.parcial)).join("")}</select>
@@ -77,7 +81,23 @@ ACT.restaurarObs = el => {
 };
 
 /* -------- programar -------- */
+/* Crea la observación para una sesión ya registrada (usada también por el cronograma institucional) */
+export async function crearObservacion(ses, o) {
+  const inst = instVigente();
+  const ins = byId("instrumentos", o.instrumentoId) || inst;
+  const sObj = byId("sesiones", ses.id) || ses;
+  const id = newId("ob-");
+  await save("observaciones", id, {
+    sesionId: ses.id, asignacionId: ses.asignacionId, docenteId: ses.docenteId, observadorId: o.observadorId, fecha: ses.fecha, parcial: parcialDe(ses.fecha),
+    planeacionId: sObj.planeacionId || o.planeacionId || "", instrumentoId: ins.id, instrumentoVersion: ins.version, estado: "Programada",
+    autorreflexionCompleta: false, detalleBloqueado: false, anteriorId: o.anteriorId || "", cronogramaId: o.cronogramaId || "", ciclo: CFG.institucion.cicloActual, periodo: CFG.institucion.periodoActual
+  }, o.cronogramaId ? "programación de observación (cronograma)" : "programación de observación");
+  notify(ses.docenteId, "Observación", `Se programó una sesión de acompañamiento el ${fdate(ses.fecha)} (${alabel(ses.asignacionId)}).`, "#/obs/" + id, id + "p");
+  if (o.observadorId !== me()) notify(o.observadorId, "Observación", `Se te asignó observar ${alabel(ses.asignacionId)} el ${fdate(ses.fecha)}.`, "#/obs/" + id, id + "o");
+  return id;
+}
 ACT.programarObs = el => {
+  if (!puedeProgramarObs()) { toast("Solo la Subdirección programa observaciones.", true); return; }
   const s = el.dataset.sesion ? byId("sesiones", el.dataset.sesion) : null;
   const inst = instVigente();
   const f = modal({ title: "Programar observación", wide: true, submit: "Programar", body: `
@@ -89,16 +109,7 @@ ACT.programarObs = el => {
       let ses = s;
       if (!ses) { const id = await crearSesion(o); ses = { id, asignacionId: o.asignacionId, docenteId: A(o.asignacionId).docenteId, fecha: o.fecha }; await S.store.set("sesiones", id, { estado: "Programada" }); }
       if (o.observadorId === ses.docenteId) { toast("La persona observadora no puede ser la misma que la observada.", true); return false; }
-      const ins = byId("instrumentos", o.instrumentoId) || inst;
-      const sObj = byId("sesiones", ses.id) || ses;
-      const id = newId("ob-");
-      await save("observaciones", id, {
-        sesionId: ses.id, asignacionId: ses.asignacionId, docenteId: ses.docenteId, observadorId: o.observadorId, fecha: ses.fecha, parcial: parcialDe(ses.fecha),
-        planeacionId: sObj.planeacionId || o.planeacionId || "", instrumentoId: ins.id, instrumentoVersion: ins.version, estado: "Programada",
-        autorreflexionCompleta: false, detalleBloqueado: false, anteriorId: o.anteriorId || "", ciclo: CFG.institucion.cicloActual, periodo: CFG.institucion.periodoActual
-      }, "programación de observación");
-      notify(ses.docenteId, "Observación", `Se programó una sesión de acompañamiento el ${fdate(ses.fecha)} (${alabel(ses.asignacionId)}).`, "#/obs/" + id, id + "p");
-      if (o.observadorId !== me()) notify(o.observadorId, "Observación", `Se te asignó observar ${alabel(ses.asignacionId)} el ${fdate(ses.fecha)}.`, "#/obs/" + id, id + "o");
+      const id = await crearObservacion(ses, o);
       toast("Observación programada."); setTimeout(() => go("/obs/" + id), 200);
     }
   });
