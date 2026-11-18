@@ -4,8 +4,8 @@
    - FirebaseStore : Cloud Firestore + Firebase Auth (tiempo real)
    Ambas exponen la misma interfaz para que la app no cambie.
    ============================================================= */
-export const COLS_CATALOGO = ["personas","grupos","unidades","actividades","modulos","asignaciones","horarios","instrumentos","calendario","paec"];
-export const COLS_PROCESO  = ["planeaciones","sesiones","concreciones","observaciones","autorreflexiones","dialogos","acuerdos","seguimientos","evidencias"];
+export const COLS_CATALOGO = ["personas","grupos","unidades","actividades","modulos","asignaciones","horarios","instrumentos","calendario","paec","cronograma_obs"];
+export const COLS_PROCESO  = ["planeaciones","sesiones","concreciones","observaciones","autorreflexiones","dialogos","acuerdos","seguimientos","evidencias","retro_planeacion"];
 export const newId = (p = "") => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const FB = "https://www.gstatic.com/firebasejs/10.12.2/";
 const CHUNK = 900000; // caracteres base64 por documento (< 1 MiB)
@@ -102,8 +102,9 @@ class FirebaseStore {
       await b.commit();
     }
   }
-  async putFile(meta, buf) {
-    const id = newId("f-"), b64 = bufToB64(buf), n = Math.ceil(b64.length / CHUNK);
+  async putFile(meta, buf) { return this.putFileId(newId("f-"), meta, buf); }
+  async putFileId(id, meta, buf) {
+    const b64 = bufToB64(buf), n = Math.ceil(b64.length / CHUNK);
     const ops = [];
     for (let i = 0; i < n; i++) ops.push(["archivos_partes", `${id}_${i}`, { fileId: id, n: i, data: b64.slice(i * CHUNK, (i + 1) * CHUNK), docenteId: meta.docenteId || "" }]);
     for (const op of ops) await this.set(...op, false);   // uno por uno: cada parte ~900 KB

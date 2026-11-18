@@ -191,11 +191,23 @@ function transversalidad(its, Ht) {
   const headers = cols.map(c => lineas(c.items).map(l => l.txt).join(" ").replace(/\s+/g, " ").trim());
   const lim = cols.map((c, i) => ({ L: i === 0 ? 0 : (cols[i - 1].x1 + c.x0) / 2, R: i === cols.length - 1 ? 99999 : (c.x1 + cols[i + 1].x0) / 2 }));
   const vals = zona.filter(b => !enc.includes(b));
-  const enCol = (b, i) => b.cx >= lim[i].L && b.cx < lim[i].R;
+  // ajustar cada límite al hueco vertical real entre columnas (el texto justificado llega casi al borde)
+  for (let i = 1; i < lim.length; i++) {
+    const m = lim[i].L, a = m - 45, z = m + 45;
+    const iv = vals.filter(b => b.x1 > a && b.x < z).map(b => [Math.max(a, b.x), Math.min(z, b.x1)]).sort((p, q) => p[0] - q[0]);
+    const gaps = []; let cur = a; iv.forEach(([s0, e]) => { if (s0 > cur + 1.5) gaps.push([cur, s0]); cur = Math.max(cur, e); }); if (z > cur + 1.5) gaps.push([cur, z]);
+    if (gaps.length) { gaps.sort((g1, g2) => Math.abs((g1[0] + g1[1]) / 2 - m) - Math.abs((g2[0] + g2[1]) / 2 - m)); const nb = (gaps[0][0] + gaps[0][1]) / 2; lim[i].L = nb; lim[i - 1].R = nb; }
+  }
+  const enCol = (b, i) => b.x >= lim[i].L - 1 && b.x < lim[i].R - 1;
   // filas: según las entradas de la primera columna
   const primeras = entradas(lineas(vals.filter(b => enCol(b, 0))), 12.5);
   if (!primeras.length) return { headers, filas: [] };
-  const cortes = primeras.map((e, i) => i === 0 ? -Infinity : (primeras[i - 1].gyFin + e.gyIni) / 2);
+  // el corte entre filas va en el mayor espacio en blanco vertical (las otras columnas pueden tener más renglones que la primera)
+  const ysVal = [...new Set(vals.map(b => Math.round(b.gy * 2) / 2))].sort((a, b) => a - b);
+  const cortes = primeras.map((e, i) => { if (i === 0) return -Infinity;
+    const a = (primeras[i - 1].gyIni + primeras[i - 1].gyFin) / 2, z = e.gyIni, ys = [a, ...ysVal.filter(y => y > a + 0.5 && y < z - 0.5), z];
+    let best = (a + z) / 2, g = -1; for (let k = 1; k < ys.length; k++) if (ys[k] - ys[k - 1] >= g - 1.2) { g = ys[k] - ys[k - 1]; best = (ys[k] + ys[k - 1]) / 2; }
+    return best; });
   const filas = primeras.map((e, r) => ({ celdas: cols.map((c, ci) => {
     const lo = cortes[r], hi = r + 1 < cortes.length ? cortes[r + 1] : Infinity;
     return lineas(vals.filter(b => enCol(b, ci) && b.gy >= lo && b.gy < hi)).map(l => l.txt).join(" ").replace(/\s+/g, " ").replace(/- (?=[a-záéíóúñ])/g, "").trim();

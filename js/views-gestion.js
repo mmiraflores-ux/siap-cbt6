@@ -5,6 +5,7 @@ import {
 } from "./core.js";
 import { setQ, dropQ } from "./app.js";
 import { camposPlan } from "./views-plan.js";
+import { vistaFormato } from "./paec-formato.js";
 import { apiladas, barras, segmentada } from "./graficas.js";
 import { ESTADOS_INSTR, planVigente } from "./tablero.js";
 
@@ -17,8 +18,9 @@ VIEWS.paec = {
   render(r) {
     if (r.q.id) return detallePAEC(byId("paec", r.q.id));
     const tab = r.q.tab || "proyectos";
-    const tabs = `<div class="tabs"><button class="${tab === "proyectos" ? "on" : ""}" onclick="SIAP.go('/paec')">Proyectos</button><button class="${tab === "transversalidad" ? "on" : ""}" onclick="SIAP.go('/paec?tab=transversalidad')">Transversalidad planeada</button></div>`;
+    const tabs = `<div class="tabs"><button class="${tab === "proyectos" ? "on" : ""}" onclick="SIAP.go('/paec')">Proyectos</button><button class="${tab === "transversalidad" ? "on" : ""}" onclick="SIAP.go('/paec?tab=transversalidad')">Transversalidad planeada</button><button class="${tab === "formato" ? "on" : ""}" onclick="SIAP.go('/paec?tab=formato')">Formato PAEC 2026-2027</button></div>`;
     if (tab === "transversalidad") return tabs + vistaTransversalidad(r.q);
+    if (tab === "formato") return tabs + vistaFormato(r.q);
     const ps = L("paec").slice().sort((a, b) => (b.creado || "").localeCompare(a.creado || ""));
     return tabs + `<div class="card"><div class="card-h"><h2>Proyectos transversales · ${ps.length}</h2>${isStaff() || isVinc() ? `<button class="btn pri" data-act="editPAEC">+ Nuevo proyecto</button>` : ""}</div>
       <p class="muted">Coordina proyectos que articulan aprendizajes de varias UAC en torno a una problemática de la comunidad. La matriz muestra la articulación <b>horizontal</b> (distintos currículos en un mismo semestre) y <b>vertical</b> (continuidad entre semestres).</p>
