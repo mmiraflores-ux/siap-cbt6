@@ -314,3 +314,4 @@ table.fmt th small{color:#fff;opacity:.9}
 .crono-notas p{margin:4px 0 0;color:var(--muted)}
 @media (max-width:640px){.kpi-mini{min-width:0;flex:1 1 30%}}
 .tabs{max-width:100%;overflow-x:auto;scrollbar-width:thin}
+.reprog{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--surface-2)}.reprog summary{cursor:pointer}.reprog .tl{margin-top:6px}

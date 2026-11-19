@@ -1,7 +1,7 @@
 /* Observación, autorreflexión, diálogo reflexivo, acuerdos, seguimiento, Vo.Bo. e instrumentos */
 import {
   S, CFG, VIEWS, ACT, FORMS, esc, $, L, P, pname, UC, A, alabel, afull, opt, chip, chipEstado, modal, save, toast, isStaff, isSub, isDoc,
-  isOri, canObserve, puedeProgramarObs, puedeEliminarObs, LTodo, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES
+  isOri, canObserve, puedeProgramarObs, puedeEliminarObs, LTodo, me, today, nowISO, fdate, fdt, parcialHoy, parcialDe, short, newId, audit, notify, byId, ESTADOS_OBS, ROLES, BLOQUES, DIAS
 } from "./core.js";
 import { setQ, dropQ, go, listaObs } from "./app.js";
 import { vistaCronograma } from "./views-crono.js";
@@ -155,12 +155,16 @@ VIEWS.obs = {
     const ant = o.anteriorId ? byId("observaciones", o.anteriorId) : null;
     const acs = L("acuerdos").filter(a => a.observacionId === o.id);
     let h = `<div class="row" style="margin-bottom:10px"><a class="btn sm" href="#/observaciones">← Observaciones</a><span class="sp"></span>
+      ${puedeReprogramar(o) ? `<button class="btn sm pri" data-act="reprogramarObs" data-id="${o.id}">Reprogramar</button>` : ""}
+      ${puedeSolicitarRep(o) ? `<button class="btn sm" data-act="solicitarReprogObs" data-id="${o.id}">Solicitar reprogramación</button>` : ""}
       ${(staff || soyObs) && o.estado === "Programada" ? `<button class="btn sm warn" data-act="cancelarObs" data-id="${o.id}">Cancelar</button>` : ""}
       ${isSub() && o.detalleBloqueado ? `<button class="btn sm" data-act="reabrirObs" data-id="${o.id}">Reabrir (autorizado)</button>` : ""}${puedeEliminarObs(o) ? `<button class="btn sm warn" data-act="eliminarObs" data-id="${o.id}">Eliminar</button>` : ""}<button class="btn sm" onclick="window.print()">Imprimir / PDF</button></div>
     <div class="card"><div class="print-h"><b>${esc(CFG.institucion.nombre)}</b> · Registro de acompañamiento</div>
       <div class="card-h"><h2>${esc(alabel(o.asignacionId))} · ${fdate(o.fecha)}</h2>${chipEstado(o.estado)}</div>${flow}
       <div class="grid g4" style="font-size:.86rem"><div><small class="muted">Docente</small><br><b>${esc(pname(o.docenteId))}</b></div><div><small class="muted">Observa</small><br><b>${esc(pname(o.observadorId))}</b></div>
       <div><small class="muted">Unidad curricular</small><br>${esc(short(afull(o.asignacionId), 70))}</div><div><small class="muted">Instrumento</small><br>${esc(ins.nombre)} · v${o.instrumentoVersion || ins.version}</div></div>
+      ${o.solicitudReprogramacion && !o.solicitudReprogramacion.atendida ? `<p class="note"><b>${esc(o.solicitudReprogramacion.nombre)} solicitó reprogramar</b> (${fdt(o.solicitudReprogramacion.fecha)}): ${esc(o.solicitudReprogramacion.categoria)} — ${esc(o.solicitudReprogramacion.motivo)}${puedeReprogramar(o) ? ` <button class="btn sm pri" data-act="reprogramarObs" data-id="${o.id}">Reprogramar ahora</button>` : ""}</p>` : ""}
+      ${(o.reprogramaciones || []).length ? `<details class="reprog" ${o.reprogramaciones.length ? "open" : ""}><summary><b>Reprogramada ${o.reprogramaciones.length === 1 ? "1 vez" : o.reprogramaciones.length + " veces"}</b></summary><div class="tl">${o.reprogramaciones.slice().reverse().map(r => `<div class="it">${fdt(r.fecha)} · <b>${esc(r.nombre)}</b> movió del <b>${fdate(r.fechaAnterior)}</b> (${esc(txtBloques(r.bloquesAnterior))}) al <b>${fdate(r.fechaNueva)}</b> (${esc(txtBloques(r.bloquesNueva))}).<br><span class="muted">${esc(r.categoria)}: ${esc(r.motivo)}</span></div>`).join("")}</div></details>` : ""}
       ${ant ? `<p class="note info">Continuidad con la observación del ${fdate(ant.fecha)} (<a href="#/obs/${ant.id}">ver</a>). Los antecedentes contextualizan; no sustituyen la evidencia de esta sesión.</p>` : ""}
       ${pl ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Lo planeado (planeación v${pl.version || 1})</summary><p style="font-size:.85rem"><b>Progresión:</b> ${esc(valorPlan(pl, "progresion") || "—")}<br><b>Propósito:</b> ${esc(short(valorPlan(pl, "proposito") || "—", 500))}<br><b>Estrategias:</b> ${esc(short(valorPlan(pl, "estrategias") || "—", 400))}</p></details>` : `<p class="faint" style="font-size:.8rem">Sesión sin planeación vinculada.</p>`}
     </div>`;
@@ -346,6 +350,84 @@ FORMS.vobo = async (o, f) => {
 };
 ACT.reabrirObs = el => modal({ title: "Reabrir registro", body: `<p class="muted">La reapertura queda registrada con motivo, responsable y fecha. El registro original se conserva en la auditoría.</p><div class="f"><label>Motivo</label><textarea name="motivo" required></textarea></div>`,
   onSubmit: async o => { const ob = byId("observaciones", el.dataset.id); await save("observaciones", ob.id, { estado: "En captura", detalleBloqueado: false, reaperturas: [...(ob.reaperturas || []), { motivo: o.motivo, por: me(), fecha: nowISO(), estadoAnterior: ob.estado }] }, "reapertura autorizada"); toast("Registro reabierto."); } });
+/* -------- reprogramar (con motivo y registro) -------- */
+const MOTIVOS_REP = ["Suspensión de clases", "Ausencia del docente", "Ausencia de quien observa", "Actividad institucional o evento escolar", "Cambio de horario o de aula", "Contingencia (clima, servicios, seguridad)", "Otro"];
+const ACTIVA_REP = ["Programada", "En captura"];
+export const puedeReprogramar = o => !!o && puedeProgramarObs() && ACTIVA_REP.includes(o.estado) && !o.detalleBloqueado && !o.eliminada;
+const puedeSolicitarRep = o => !!o && !puedeProgramarObs() && o.observadorId === me() && ACTIVA_REP.includes(o.estado) && !o.eliminada && !(o.solicitudReprogramacion && !o.solicitudReprogramacion.atendida);
+const txtBloques = bl => (bl || []).length ? `${BLOQUES[bl[0]]?.[0] || "?"}–${BLOQUES[bl[bl.length - 1]]?.[1] || "?"}` : "sin bloque";
+const diaDe = f => (new Date(f + "T12:00:00").getDay() + 6) % 7;
+/* bloques en que esa asignación aparece en el horario del grupo, en el día indicado */
+function bloquesEnHorario(asgId, dia) {
+  const a = A(asgId); if (!a || dia > 4) return [];
+  const h = L("horarios").find(x => x.grupo === a.grupo && x.periodo === CFG.institucion.periodoActual) || L("horarios").find(x => x.grupo === a.grupo);
+  return BLOQUES.map((_, b) => b).filter(b => { const c = h?.celdas?.[`${dia}-${b}`]; return c && (c.asignacionId === a.id || (a.operativa && c.actividadId === a.actividadId && c.docenteId === a.docenteId)); });
+}
+const subdireccion = () => L("personas").filter(p => (p.roles || []).includes("subdirectora")).map(p => p.id);
+
+ACT.reprogramarObs = el => {
+  const o = byId("observaciones", el.dataset.id);
+  if (!puedeReprogramar(o)) { toast("Esta observación ya no se puede reprogramar.", true); return; }
+  const ses = byId("sesiones", o.sesionId);
+  const blAnt = (ses?.bloques || []).map(Number);
+  const sol = o.solicitudReprogramacion && !o.solicitudReprogramacion.atendida ? o.solicitudReprogramacion : null;
+  const f = modal({ title: "Reprogramar observación", wide: true, submit: "Reprogramar", body: `
+    <p class="note info"><b>${esc(pname(o.docenteId))}</b> · ${esc(alabel(o.asignacionId))} · observa ${esc(pname(o.observadorId))}<br>Fecha actual: <b>${DIAS[diaDe(o.fecha)] || ""} ${fdate(o.fecha)}</b> · ${esc(txtBloques(blAnt))}</p>
+    ${sol ? `<p class="note">Solicitud de ${esc(sol.nombre)}: ${esc(sol.categoria)} — ${esc(sol.motivo)}</p>` : ""}
+    <div class="grid g2"><div class="f"><label>Nueva fecha</label><input type="date" name="fecha" id="rf" min="${today()}" required><span class="hint" id="rfh">Elige la fecha en que sí se realizará.</span></div>
+    <div class="f"><label>Motivo de la reprogramación</label><select name="categoria" required><option value="">— Elige —</option>${MOTIVOS_REP.map(m => opt(m, m, sol?.categoria)).join("")}</select></div></div>
+    <div class="f"><label>Bloque(s)</label><div class="checks" id="rb"></div></div>
+    <div class="f"><label>Explica qué pasó</label><textarea name="motivo" required minlength="10" placeholder="Ej.: Se suspendieron clases por la ceremonia del 20 de noviembre.">${esc(sol?.motivo || "")}</textarea></div>
+    <p class="muted" style="font-size:.82rem">Se conserva el historial (fecha anterior, nueva fecha, motivo, quién y cuándo) y se avisa al docente y a quien observa.</p>`,
+    onSubmit: async v => {
+      const motivo = (v.motivo || "").trim(), fe = v.fecha, bl = (v.bloques || []).map(Number);
+      if (!fe || fe < today()) { toast("Elige una fecha a partir de hoy.", true); return false; }
+      if (fe === o.fecha && JSON.stringify(bl) === JSON.stringify(blAnt)) { toast("La fecha y los bloques son los mismos que ya estaban.", true); return false; }
+      if (!bl.length) { toast("Marca al menos un bloque.", true); return false; }
+      if (!v.categoria) { toast("Elige el motivo.", true); return false; }
+      if (motivo.length < 10) { toast("Explica el motivo (al menos 10 caracteres).", true); return false; }
+      if (L("observaciones").some(x => x.id !== o.id && x.asignacionId === o.asignacionId && x.fecha === fe && x.estado !== "Cancelada")) { toast(`Ya hay otra observación de esta clase el ${fdate(fe)}.`, true); return false; }
+      const actual = byId("observaciones", o.id) || o;
+      const reg = { fechaAnterior: actual.fecha, bloquesAnterior: blAnt, fechaNueva: fe, bloquesNueva: bl, categoria: v.categoria, motivo, por: me(), nombre: pname(me()), fecha: nowISO() };
+      const cambios = { fecha: fe, parcial: parcialDe(fe), reprogramaciones: [...(actual.reprogramaciones || []), reg] };
+      if (actual.solicitudReprogramacion && !actual.solicitudReprogramacion.atendida) cambios.solicitudReprogramacion = { ...actual.solicitudReprogramacion, atendida: true, atendidaPor: me(), atendidaFecha: nowISO() };
+      await save("observaciones", o.id, cambios, "reprogramación de observación");
+      if (ses) await save("sesiones", ses.id, { fecha: fe, parcial: parcialDe(fe), bloques: bl, estado: "Programada" }, "reprogramación de sesión");
+      const txt = `Se reprogramó la observación de ${alabel(o.asignacionId)} del ${fdate(reg.fechaAnterior)} al ${fdate(fe)} (${txtBloques(bl)}). Motivo: ${v.categoria} — ${short(motivo, 120)}`;
+      notify(o.docenteId, "Observación", txt, "#/obs/" + o.id, o.id + "rep" + reg.fecha);
+      if (o.observadorId !== me()) notify(o.observadorId, "Observación", txt, "#/obs/" + o.id, o.id + "repo" + reg.fecha);
+      toast(`Observación reprogramada al ${fdate(fe)}.`);
+    }
+  });
+  const upd = () => {
+    const fe = $("#rf", f).value, d = fe ? diaDe(fe) : -1;
+    const sug = fe ? bloquesEnHorario(o.asignacionId, d) : [];
+    const marcados = fe ? (sug.length ? sug : (d === diaDe(o.fecha) ? blAnt : [])) : blAnt;
+    $("#rb", f).innerHTML = BLOQUES.map((b, i) => `<label><input type="checkbox" name="bloques[]" value="${i}" ${marcados.includes(i) ? "checked" : ""}> ${b[0]}–${b[1]}${sug.includes(i) ? " ★" : ""}</label>`).join("");
+    $("#rfh", f).innerHTML = !fe ? "Elige la fecha en que sí se realizará." : d > 4 ? `<span style="color:var(--rojo)">Es fin de semana.</span>`
+      : sug.length ? `${DIAS[d]} · parcial ${parcialDe(fe) || "—"} · ★ bloques de esta clase en el horario.` : `<span style="color:var(--rojo)">El ${DIAS[d]} esta clase no aparece en el horario del grupo; marca los bloques manualmente.</span>`;
+  };
+  $("#rf", f).addEventListener("change", upd); upd();
+};
+
+ACT.solicitarReprogObs = el => {
+  const o = byId("observaciones", el.dataset.id);
+  if (!puedeSolicitarRep(o)) return;
+  modal({ title: "Solicitar reprogramación", submit: "Enviar solicitud", body: `
+    <p class="muted">La Subdirección reprograma las observaciones. Indica por qué no se puede realizar el ${fdate(o.fecha)}; recibirá tu solicitud.</p>
+    <div class="f"><label>Motivo</label><select name="categoria" required><option value="">— Elige —</option>${MOTIVOS_REP.map(m => opt(m, m)).join("")}</select></div>
+    <div class="f"><label>Explica qué pasó</label><textarea name="motivo" required minlength="10"></textarea></div>`,
+    onSubmit: async v => {
+      const motivo = (v.motivo || "").trim();
+      if (!v.categoria || motivo.length < 10) { toast("Elige el motivo y explícalo (al menos 10 caracteres).", true); return false; }
+      const sol = { categoria: v.categoria, motivo, por: me(), nombre: pname(me()), fecha: nowISO(), atendida: false };
+      await save("observaciones", o.id, { solicitudReprogramacion: sol }, "solicitud de reprogramación");
+      subdireccion().forEach(pid => notify(pid, "Observación", `${pname(me())} solicita reprogramar la observación de ${alabel(o.asignacionId)} del ${fdate(o.fecha)}: ${v.categoria} — ${short(motivo, 120)}`, "#/obs/" + o.id, o.id + "sol" + sol.fecha));
+      toast("Solicitud enviada a la Subdirección.");
+    }
+  });
+};
+
 ACT.cancelarObs = el => modal({ title: "Cancelar observación", body: `<div class="f"><label>Motivo (opcional)</label><input type="text" name="motivo"></div>`,
   onSubmit: async o => { await save("observaciones", el.dataset.id, { estado: "Cancelada", motivoCancelacion: o.motivo }, "cancelación"); toast("Observación cancelada."); } });
 

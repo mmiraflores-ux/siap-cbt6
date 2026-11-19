@@ -7,7 +7,7 @@ import {
 } from "./core.js";
 import "./views-academico.js";
 import "./views-plan.js";
-import "./views-obs.js";
+import { puedeReprogramar } from "./views-obs.js";
 import "./views-gestion.js";
 import "./views-criterios.js";
 import { panelStaff } from "./tablero.js";
@@ -348,7 +348,7 @@ function panelOri() {
 }
 export function listaObs(arr) {
   return `<div class="tw"><table><thead><tr><th>Fecha</th><th>Asignación</th><th>Docente</th><th>Observa</th><th>Estado</th><th></th></tr></thead><tbody>
-  ${arr.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map(o => `<tr><td>${fdate(o.fecha)}</td><td>${esc(alabel(o.asignacionId))}</td><td>${esc(pname(o.docenteId))}</td><td>${esc(pname(o.observadorId))}</td><td>${chipEstado(o.estado)}</td><td class="num nowrap"><a class="btn sm" href="#/obs/${o.id}">Abrir</a>${puedeEliminarObs(o) ? ` <button class="btn sm warn" data-act="eliminarObs" data-id="${o.id}" title="Eliminar con motivo (queda registro)">Eliminar</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+  ${arr.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).map(o => `<tr><td>${fdate(o.fecha)}</td><td>${esc(alabel(o.asignacionId))}</td><td>${esc(pname(o.docenteId))}</td><td>${esc(pname(o.observadorId))}</td><td>${chipEstado(o.estado)}${(o.reprogramaciones || []).length ? `<span class="sub">Reprogramada${o.reprogramaciones.length > 1 ? " ×" + o.reprogramaciones.length : ""}</span>` : ""}${o.solicitudReprogramacion && !o.solicitudReprogramacion.atendida ? `<span class="sub" style="color:var(--rojo)">Pide reprogramar</span>` : ""}</td><td class="num nowrap"><a class="btn sm" href="#/obs/${o.id}">Abrir</a>${puedeReprogramar(o) ? ` <button class="btn sm" data-act="reprogramarObs" data-id="${o.id}">Reprogramar</button>` : ""}${puedeEliminarObs(o) ? ` <button class="btn sm warn" data-act="eliminarObs" data-id="${o.id}" title="Eliminar con motivo (queda registro)">Eliminar</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
 }
 function panelDocente() {
   const pid = me(); const mis = L("asignaciones").filter(a => a.docenteId === pid);
