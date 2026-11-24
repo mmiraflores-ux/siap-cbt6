@@ -8,6 +8,7 @@ import {
 import "./views-academico.js";
 import "./views-plan.js";
 import { puedeReprogramar } from "./views-obs.js";
+import { pintarFotos, cargarMiniaturas } from "./fotos-obs.js";
 import "./views-gestion.js";
 import "./views-criterios.js";
 import { panelStaff } from "./tablero.js";
@@ -157,6 +158,8 @@ function scheduleRender() {
   clearTimeout(renderT);
   renderT = setTimeout(() => {
     if (S.user && S.user.personaId) S.user.nombre = P(S.user.personaId)?.nombre || S.user.nombre || "";
+    // el recuadro de fotos se actualiza aunque haya un formulario a medio llenar
+    document.querySelectorAll(".fotos-obs").forEach(b => pintarFotos(b.dataset.obs));
     if (dirty || $("#ov")) { pendingRefresh = true; const r = $("#refresh"); if (r) r.hidden = false; return; }
     render();
   }, 60);
@@ -169,7 +172,7 @@ function parseHash() {
   const q = Object.fromEntries(new URLSearchParams(qs || ""));
   return { view: VIEWS[view] ? view : "panel", id: id ? decodeURIComponent(id) : null, q };
 }
-function onRoute() { S.route = parseHash(); dirty = false; closeModal(); $(".app")?.classList.remove("open"); render(); window.scrollTo(0, 0); }
+function onRoute() { S.route = parseHash(); dirty = false; closeModal(); S.menuAbierto = false; render(); window.scrollTo(0, 0); }
 export function go(h) { location.hash = h; }
 window.go = go;
 export function setQ(k, v) {
@@ -222,16 +225,18 @@ export function render() {
   const sync = S.store.mode === "firebase" ? `<span class="sync ${S.store.online ? "" : "off"}"><i></i>${S.store.online ? "En línea · tiempo real" : "Sin conexión · se sincroniza al volver"}</span>`
     : `<span class="sync off"><i></i>Modo local (este navegador)</span>`;
   const rl = roles().map(r => ROLES[r] || r).join(" · ");
-  root.innerHTML = `<div class="app">
-    <aside class="side"><div class="brand"><div class="seal">CBT6</div><div><b>SIAP</b><span>Sistema Integral de Acompañamiento Pedagógico</span></div></div>
+  root.innerHTML = `<div class="app${S.menuAbierto ? " open" : ""}">
+    <div class="scrim" data-act="menu" aria-hidden="true"></div>
+    <aside class="side" id="menuLateral"><div class="brand"><div class="seal">CBT6</div><div><b>SIAP</b><span>Sistema Integral de Acompañamiento Pedagógico</span></div></div>
       <nav class="nav">${navHtml}</nav>
       <div class="who"><b>${esc(P(S.user.personaId)?.nombre || (S.user.nombre && !S.user.nombre.startsWith("(") ? S.user.nombre : "") || S.user.email || "Usuario")}</b>${S.user.personaId && !P(S.user.personaId) && S.ready && L("personas").length ? `<small style="color:var(--amb,#a15c00)">Cuenta sin persona del catálogo; Subdirección puede vincularla en Administración → Accesos.</small>` : ""}<small>${esc(rl || "Sin rol asignado")}</small><br>
       <button class="btn sm" data-act="logout" style="margin-top:8px">Cerrar sesión</button> <button class="btn sm ghost" data-act="tema" title="Cambiar tema">◐</button></div></aside>
-    <div class="main"><header class="top"><button class="burger" data-act="menu" aria-label="Menú">☰</button>
+    <div class="main"><header class="top"><button class="burger" data-act="menu" aria-label="Abrir menú" aria-controls="menuLateral" aria-expanded="${S.menuAbierto ? "true" : "false"}">☰</button>
       <div class="ttl"><h1>${esc(V.title ? (typeof V.title === "function" ? V.title(S.route) : V.title) : "")}</h1><small class="muted">${esc(CFG.institucion.nombre)} · Ciclo ${esc(CFG.institucion.cicloActual)} · Periodo ${esc(CFG.institucion.periodoActual)} · Parcial ${parcialHoy()}</small></div>
       <button class="btn sm" id="refresh" hidden data-act="refrescar">↻ Datos nuevos</button>${sync}</header>
       <main class="content">${body}</main></div></div>`;
   V.after && V.after(S.route);
+  cargarMiniaturas();
 }
 
 /* ======================= LOGIN ======================= */
@@ -284,7 +289,8 @@ Object.assign(ACT, {
     S.store.onAuth(onAuthChange);
   },
   async logout() { await S.store.logout(); if (S.store.mode === "local") onAuthChange(null); },
-  menu: () => $(".app").classList.toggle("open"),
+  /* el estado del menú se guarda en S para que no se cierre cuando llegan datos nuevos y la pantalla se vuelve a dibujar */
+  menu: () => { S.menuAbierto = !S.menuAbierto; $(".app")?.classList.toggle("open", S.menuAbierto); $(".burger")?.setAttribute("aria-expanded", S.menuAbierto ? "true" : "false"); },
   refrescar: () => { dirty = false; render(); },
   tema: () => { const r = document.documentElement; const cur = r.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); r.dataset.theme = cur === "dark" ? "light" : "dark"; try { localStorage.setItem("siap_tema", r.dataset.theme); } catch {} },
   async leerNotif(el) { await S.store.set("notificaciones", el.dataset.id, { leida: true }); if (el.dataset.link) go(el.dataset.link.replace(/^#/, "")); },
@@ -293,6 +299,7 @@ Object.assign(ACT, {
 try { const t = localStorage.getItem("siap_tema"); if (t) document.documentElement.dataset.theme = t; } catch {}
 
 /* delegación global de eventos */
+document.addEventListener("keydown", e => { if (e.key === "Escape" && S.menuAbierto && !$("#ov")) ACT.menu(); });
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const fn = ACT[el.dataset.act]; if (!fn) return;

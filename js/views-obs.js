@@ -5,6 +5,7 @@ import {
 } from "./core.js";
 import { setQ, dropQ, go, listaObs } from "./app.js";
 import { vistaCronograma } from "./views-crono.js";
+import { fotosObsHtml } from "./fotos-obs.js";
 import { formSesion, wireSesion, crearSesion, evidenciaInput, evidenciaHtml, guardarEvidencia, valorPlan, camposPlan } from "./views-plan.js";
 
 const BL = () => window.BLOOM;
@@ -228,7 +229,8 @@ function formObservacion(o, det, crit, ins, pl) {
         ${det.bloomPlaneado && det.bloomObservado ? `<p class="note ${BL().congruencia(+det.bloomPlaneado, +det.bloomObservado).chip === "g" ? "ok" : "info"}">${esc(BL().congruencia(+det.bloomPlaneado, +det.bloomObservado).texto)}</p>` : ""}` : ""}</div>`; }).join("")}
     <div class="grid g2"><div class="f"><label>Fortalezas identificadas</label><textarea name="fortalezas">${esc(det.fortalezas || "")}</textarea></div><div class="f"><label>Oportunidades de mejora</label><textarea name="oportunidades">${esc(det.oportunidades || "")}</textarea></div></div>
     <div class="f"><label>Notas generales y evidencia observada</label><textarea name="notas">${esc(det.notas || "")}</textarea></div>
-    ${evidenciaHtml(L("evidencias").filter(e => e.refCol === "observaciones" && e.refId === o.id))}${evidenciaInput()}
+    ${evidenciaHtml(L("evidencias").filter(e => e.refCol === "observaciones" && e.refId === o.id && e.tipo !== "imagen"))}
+    ${fotosObsHtml(o, true)}
     <div class="row end" style="margin-top:10px"><button class="btn" value="borrador">Guardar borrador</button><button class="btn pri" value="cerrar">Cerrar registro y enviar a autorreflexión</button></div>
     <p class="faint" style="font-size:.75rem">Al cerrar, el registro queda protegido (solo se modifica con reapertura autorizada) y se notifica al docente para su autorreflexión.</p></form>`;
 }
@@ -239,7 +241,7 @@ function vistaObservacion(o, det, crit) {
     <div class="tw"><table><thead><tr><th>Criterio</th><th>Nivel</th><th>Lo observado</th></tr></thead><tbody>${crit.map(c => { const v = det.respuestas?.[c.id] || {}; return `<tr><td><b>${esc(c.texto)}</b></td><td>${v.nivel ? chip(v.nivel, v.nivel === "No aplica" ? "" : "m") : `<span class="faint">Pendiente</span>`}</td><td>${esc(v.nota || "")}</td></tr>`; }).join("")}</tbody></table></div>
     ${cg ? `<p class="note ${cg.chip === "g" ? "ok" : "info"}"><b>Bloom:</b> verbo “${esc(det.bloomVerbo || "—")}” · planeado ${BN[det.bloomPlaneado - 1].nombre} · observado ${BN[det.bloomObservado - 1].nombre}. ${esc(cg.texto)}</p>` : ""}
     <div class="grid g2" style="margin-top:10px"><div><b>Fortalezas</b><p>${esc(det.fortalezas || "—")}</p></div><div><b>Oportunidades de mejora</b><p>${esc(det.oportunidades || "—")}</p></div></div>
-    ${det.notas ? `<p><b>Notas:</b> ${esc(det.notas)}</p>` : ""}${evidenciaHtml(L("evidencias").filter(e => e.refCol === "observaciones" && e.refId === o.id))}
+    ${det.notas ? `<p><b>Notas:</b> ${esc(det.notas)}</p>` : ""}${evidenciaHtml(L("evidencias").filter(e => e.refCol === "observaciones" && e.refId === o.id && e.tipo !== "imagen"))}${fotosObsHtml(o, false)}
     <p class="faint" style="font-size:.75rem">Resultado descriptivo: el sistema no calcula puntajes, promedios ni rankings.</p></div>`;
 }
 function formAutorreflexion(o, ar, ins) {
